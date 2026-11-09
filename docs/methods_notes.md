@@ -119,7 +119,7 @@ minimize ‖W X − Ŵ X‖², where X are the layer's inputs on calibration dat
 **Observations:**
 - Llama-3.2-1B: PPL 10.906 (+11.8%). Recovers 41% of RTN's loss, behind GPTQ. Quantization took 215 s and 9.2 GiB of GPU: 3× slower and 4× more memory than GPTQ, the **opposite** of the paper's cost claim.
 - Llama-3.2-3B: PPL 8.282 (+6.0%). Recovers 31%. 572 s, 11.6 GiB. The gap to GPTQ shrinks to 0.04 PPL.
-- **Very stable across calibration samples,** which confirms the paper's robustness claim. Over 3 seeds: 1B 10.907 ± 0.005 (about 30× less spread than GPTQ), 3B 8.281 ± 0.002 (5× less). AWQ only uses average activation magnitudes per channel to pick its scales, and these statistics barely change between sample sets. Trade-off seen so far: GPTQ is slightly more accurate on average, while AWQ is more predictable.
+- **Very stable across calibration samples,** which confirms the paper's robustness claim. Over 3 seeds: 1B 10.907 ± 0.005 (about 30× less spread than GPTQ), 3B 8.281 ± 0.003 (about 4× less). AWQ only uses average activation magnitudes per channel to pick its scales, and these statistics barely change between sample sets. Trade-off seen so far: GPTQ is slightly more accurate on average, while AWQ is more predictable.
 - Why AWQ costs more here: it runs each block once per candidate scale (20 times) on all 262k calibration tokens and keeps the block inputs on the GPU. GPTQ needs one pass per layer to collect statistics. Our 2048-token samples (4× the tokens of AWQ's default 128 × 512) make this heavier.
 
 **Points for the report:**

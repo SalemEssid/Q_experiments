@@ -5,6 +5,11 @@ Usage (from ~/Q_experiments, with the vllm venv active):
   python scripts/vllm_check.py --model models/Llama-3.2-1B-GPTQ-W4A16_ASYM
 """
 import argparse
+import os
+
+# FlashInfer would compile its sampling kernels with the system nvcc 12.0, which is too old
+# (it rejects --compress-mode=size). Use vLLM's own PyTorch sampler instead. Must be set before importing vLLM.
+os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
 
 import torch
 import vllm

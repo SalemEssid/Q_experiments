@@ -26,6 +26,16 @@ All experiments run on the same machine and software stack, so results are direc
 | llm-compressor | 0.15.0 (GPTQ, AWQ, SmoothQuant) |
 | compressed-tensors | 0.20.1 (checkpoint format) |
 
+### vLLM environment (speed and memory measurements)
+
+| Component | Version / setting |
+|---|---|
+| vLLM | 0.32.0+cu129 (the last release with a CUDA 12.x wheel; 0.33.0 is CUDA 13 only and cannot run on driver 535) |
+| PyTorch | 2.13.0+cu129 (installed by vLLM) |
+| transformers / compressed-tensors | 5.19.0 / 0.17.0 |
+| Workaround 1 | `torchcodec` uninstalled. The PyPI build is for CUDA 13 and crashes `import vllm`. It is only used for audio/video input |
+| Workaround 2 | `VLLM_USE_FLASHINFER_SAMPLER=0`. FlashInfer would compile its sampling kernels with the system nvcc 12.0, which is too old, so vLLM's PyTorch sampler is used instead. Same setting for every model, so the comparison stays fair |
+
 ## Quantization settings shared by all methods
 
 | Setting | Value |
