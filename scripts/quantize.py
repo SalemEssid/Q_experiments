@@ -1,6 +1,7 @@
-"""Quantize a model with llm-compressor (GPTQ or AWQ) and record what the quantization cost.
+"""Quantize a model with llm-compressor (RTN, GPTQ or AWQ) and record what the quantization cost.
 
 Usage (from ~/Q_experiments):
+  python scripts/quantize.py --method rtn  --model meta-llama/Llama-3.2-1B
   python scripts/quantize.py --method gptq --model meta-llama/Llama-3.2-1B
   python scripts/quantize.py --method awq  --model meta-llama/Llama-3.2-1B
 
@@ -27,7 +28,7 @@ from calib_data import get_calibration_data
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--model", required=True, help="Hugging Face model ID")
-parser.add_argument("--method", required=True, choices=["gptq", "awq"])
+parser.add_argument("--method", required=True, choices=["rtn", "gptq", "awq"])
 parser.add_argument(
     "--scheme",
     default="W4A16_ASYM",
@@ -40,6 +41,10 @@ args = parser.parse_args()
 
 
 def build_recipe(method, scheme):
+    if method == "rtn":
+        # Round-to-nearest: each weight is simply rounded to the closest 4-bit level.
+        # No calibration and no error correction: the reference that shows what GPTQ and AWQ add.
+        return QuantizationModifier(targets="Linear", scheme=scheme, ignore=["lm_head"])
     if method == "gptq":
         # GPTQ rounds each layer's weights one column at a time. After each column it adjusts the
         # columns not yet rounded to cancel the rounding error, using statistics of the calibration
