@@ -45,6 +45,20 @@ All experiments run on the same machine and software stack, so results are direc
 | W4A16 format | `W4A16_ASYM`: 4-bit integer weights with zero-point, group size 128, BF16 activations |
 | Exact algorithm settings | saved by llm-compressor as `recipe.yaml` inside each checkpoint folder |
 
+## Speed and memory protocol (`scripts/bench_vllm.py`)
+
+All models run in vLLM with the same settings: `gpu_memory_utilization=0.85`, `max_model_len=2048`, prefix caching off, CUDA graphs and torch.compile at their defaults, greedy decoding with `ignore_eos` (every request produces exactly the requested number of tokens). Prompts are random token IDs of a fixed length, identical for every model.
+
+| Workload | What it measures | Settings | Repeats |
+|---|---|---|---|
+| Latency, 1 request | **TTFT** (time to first token) and **TPOT** (time per output token). Memory-bound: favours small weights | 128 prompt tokens → 256 output tokens. TPOT = (time for 256 tokens − TTFT) / 255 | 3 warm-up, median of 10 |
+| Prefill | Prompt processing speed. Compute-bound: favours fast math (INT8/INT4) | 32 requests × 1024 tokens → 1 token | 1 warm-up, median of 5 |
+| Throughput under load | Output tokens/s when many users are served at once | 256 requests × 512 tokens → 256 tokens, all submitted together | 1 warm-up, median of 3 |
+
+**Memory:** vLLM reserves the same share of GPU memory for every model, so `nvidia-smi` usage says nothing about the model. We report instead (1) the memory taken by the weights (vLLM log line "Model loading took X GiB") and (2) the **KV-cache capacity** in tokens left in the same budget. Smaller weights leave more room for the KV cache, so more requests can run at once.
+
+**Shared GPU check:** a BF16 matmul probe runs before and after each benchmark. About 110 TFLOPS means the physical GPU was idle. A lower value means another VM was using it, and the run should be repeated.
+
 ## Notes that affect the comparison
 
 - **Shared GPU:** the physical A40 may be used by another VM at the same time, which slows our runs. Speed results are repeated several times and the median is reported. The BF16 matmul figure above is the reference for an idle GPU.
