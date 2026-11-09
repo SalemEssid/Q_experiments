@@ -22,6 +22,18 @@ All experiments run on the same machine and software stack, so results are direc
 | gcc | 13.2 |
 | Python | 3.11.6 (venv) |
 | PyTorch | 2.14.1+cu126 |
+| transformers | 5.21.0 (set by llm-compressor; baselines re-run with this version) |
+| llm-compressor | 0.15.0 (GPTQ, AWQ, SmoothQuant) |
+| compressed-tensors | 0.20.1 (checkpoint format) |
+
+## Quantization settings shared by all methods
+
+| Setting | Value |
+|---|---|
+| Calibration data | 128 windows × 2048 tokens, random positions in long documents of C4 (train shard 00000), seed 0. Identical samples for every method (`scripts/calib_data.py`) |
+| Layers not quantized | `lm_head` |
+| W4A16 format | `W4A16_ASYM`: 4-bit integer weights with zero-point, group size 128, BF16 activations |
+| Exact algorithm settings | saved by llm-compressor as `recipe.yaml` inside each checkpoint folder |
 
 ## Notes that affect the comparison
 
