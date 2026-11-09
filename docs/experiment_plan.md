@@ -10,9 +10,9 @@ Goal: smaller model, faster single-user generation.
 
 | Method | Implementation | Status |
 |---|---|---|
-| RTN (reference) | llm-compressor | perplexity done (1B, 3B) |
-| GPTQ | llm-compressor | perplexity done (1B, 3B, 3 seeds) |
-| AWQ | llm-compressor | perplexity done (1B, 3B, 3 seeds) |
+| RTN (reference) | llm-compressor | perplexity, speed, memory done (1B, 3B); zero-shot pending |
+| GPTQ | llm-compressor | perplexity (3 seeds), speed, memory done (1B, 3B); zero-shot pending |
+| AWQ | llm-compressor | perplexity (3 seeds), speed, memory done (1B, 3B); zero-shot pending |
 
 Speed and memory: vLLM (Marlin W4A16 kernels).
 

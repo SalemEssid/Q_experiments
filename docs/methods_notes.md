@@ -91,7 +91,7 @@ minimize ‖W X − Ŵ X‖², where X are the layer's inputs on calibration dat
 **Observations:**
 - Llama-3.2-1B: PPL 10.610 (+8.7%). Recovers 56% of RTN's loss, the best of the three W4A16 methods. Quantization took 72 s, with a peak GPU memory of 2.3 GiB: llm-compressor moves one layer at a time to the GPU.
 - Llama-3.2-3B: PPL 8.241 (+5.4%). Recovers 37% of RTN's loss. 167 s, 2.7 GiB of GPU.
-- **Sensitive to the calibration samples.** Over 3 seeds: 1B 10.699 ± 0.165 (range 10.598–10.889), 3B 8.254 ± 0.011. This is expected from how GPTQ works: it solves a least-squares problem on the exact calibration inputs (it fits H = X Xᵀ), so it partly fits the particular samples. With an unlucky set (seed 1 on the 1B) it loses about a third of its improvement over RTN.
+- **Sensitive to the calibration samples.** Over 3 seeds: 1B 10.699 ± 0.164 (range 10.598–10.889), 3B 8.254 ± 0.011. This is expected from how GPTQ works: it solves a least-squares problem on the exact calibration inputs (it fits H = X Xᵀ), so it partly fits the particular samples. With an unlucky set (seed 1 on the 1B) it loses about a third of its improvement over RTN.
 
 ---
 
@@ -119,7 +119,7 @@ minimize ‖W X − Ŵ X‖², where X are the layer's inputs on calibration dat
 **Observations:**
 - Llama-3.2-1B: PPL 10.906 (+11.8%). Recovers 41% of RTN's loss, behind GPTQ. Quantization took 215 s and 9.2 GiB of GPU: 3× slower and 4× more memory than GPTQ, the **opposite** of the paper's cost claim.
 - Llama-3.2-3B: PPL 8.282 (+6.0%). Recovers 31%. 572 s, 11.6 GiB. The gap to GPTQ shrinks to 0.04 PPL.
-- **Very stable across calibration samples,** which confirms the paper's robustness claim. Over 3 seeds: 1B 10.907 ± 0.005 (about 30× less spread than GPTQ), 3B 8.281 ± 0.003 (about 4× less). AWQ only uses average activation magnitudes per channel to pick its scales, and these statistics barely change between sample sets. Trade-off seen so far: GPTQ is slightly more accurate on average, while AWQ is more predictable.
+- **Very stable across calibration samples,** which confirms the paper's robustness claim. Over 3 seeds: 1B 10.907 ± 0.005 (about 30× less spread than GPTQ), 3B 8.280 ± 0.003 (about 4× less). AWQ only uses average activation magnitudes per channel to pick its scales, and these statistics barely change between sample sets. Trade-off seen so far: GPTQ is slightly more accurate on average, while AWQ is more predictable.
 - Why AWQ costs more here: it runs each block once per candidate scale (20 times) on all 262k calibration tokens and keeps the block inputs on the GPU. GPTQ needs one pass per layer to collect statistics. Our 2048-token samples (4× the tokens of AWQ's default 128 × 512) make this heavier.
 
 **Points for the report:**
@@ -205,6 +205,14 @@ Y = (X · diag(s)⁻¹) · (diag(s) · W), with s_j = max|X_j|^α / max|W_j|^(1�
 - Hugging Face transformers runs the quantized checkpoints without fast low-bit kernels. Evaluation time is the same as BF16 (about 11 s for the 1B). Speed must be measured in vLLM.
 - Model size: Llama-3.2-1B and 3B share one matrix between the embedding and `lm_head`, which stays in BF16. In the 1B it is about half of the 4-bit checkpoint (0.49 of 0.96 GiB), so compression is 2.4×, not 4×.
 - The research codebases (QuaRot, SpinQuant, DuQuant) simulate quantization: values are rounded, but the math stays in 16 bits. Accuracy is valid; speed is not.
+- vLLM runs our W4A16 checkpoints with the **Marlin** kernel: it reads the packed 4-bit weights, unpacks them to BF16 in fast on-chip memory and multiplies in BF16. Greedy output is word-for-word the same as Hugging Face's, so the speed and accuracy numbers describe the same model.
+
+## 10b. What the W4A16 speed results teach (for the discussion section)
+
+- **Weight-only quantization speeds up memory-bound work only.** Single-request generation became 1.91× (1B) and 2.34× (3B) faster, about 82% of the speedup predicted from the byte ratio. Prefill and high-load throughput did not improve (0.93–1.02×), because they are limited by arithmetic, which W4A16 still does in BF16.
+- **This is exactly the distinction the mentor pointed out between W4A16 and W8A8.** W8A8 (SmoothQuant) and W4A4 (QuaRot, SpinQuant, DuQuant) also quantize activations so the INT8/INT4 tensor cores can be used. That is the only way to speed up the compute-bound workloads.
+- **The speed of a W4A16 model depends only on its format,** not on the method that chose the rounding (RTN, GPTQ and AWQ were within 1%). The choice of method is therefore purely about accuracy and quantization cost.
+- **For a fixed budget, quantize a bigger model:** a 4-bit 3B matches a BF16 1B in speed (209 vs 222 tok/s) and memory (2.15 vs 2.32 GiB), with much better perplexity (8.25 vs 9.76).
 
 ## 11. Questions for the mentor
 

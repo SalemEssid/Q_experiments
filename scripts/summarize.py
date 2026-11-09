@@ -2,6 +2,7 @@
 
 Table 1: one row per run. Table 2: mean ± std over calibration seeds (only when a method has several seeds).
 Table 3: vLLM speed and memory (only when results/speed exists).
+Tables 4-5: zero-shot accuracy per run, and its average over calibration seeds (only when results/zeroshot exists).
 Usage (from ~/Q_experiments):  python scripts/summarize.py
 """
 import json
@@ -108,3 +109,41 @@ if speed:
             f"| {vs_bf16(thr['output_tokens_per_s'], ref['throughput']['output_tokens_per_s'] if ref else 1)} "
             f"| {s['gpu_tflops_before']} / {s['gpu_tflops_after']} |"
         )
+
+
+TASK_LABELS = {
+    "arc_easy": "ARC-e",
+    "arc_challenge": "ARC-c",
+    "hellaswag": "HellaSwag",
+    "piqa": "PIQA",
+    "winogrande": "WinoGrande",
+    "boolq": "BoolQ",
+}
+
+zeroshot = load("results/zeroshot")
+if zeroshot:
+    print("\nZero-shot accuracy (%, lm-eval, 0-shot; acc_norm where the task has it, else acc)")
+    print("| Model | Method | " + " | ".join(TASK_LABELS.values()) + " | Avg |")
+    print("|---|---|" + "---|" * (len(TASK_LABELS) + 1))
+    rows, avg_groups = [], {}
+    for name, z in zeroshot.items():
+        base, method = split_name(name)
+        seed = int(name.rsplit("-seed", 1)[1]) if "-seed" in name else 0
+        label = method + (f" (seed {seed})" if seed else "")
+        order = METHOD_ORDER.get(method, 9)
+        cells = " | ".join(f"{z['tasks'][t]['value']:.1f}" if t in z["tasks"] else "–" for t in TASK_LABELS)
+        rows.append(((base, order, seed), f"| {base} | {label} | {cells} | {z['average']:.2f} |"))
+        avg_groups.setdefault((base, order, method), []).append(z["average"])
+    for _, line in sorted(rows):
+        print(line)
+
+    multi_seed = [(k, v) for k, v in sorted(avg_groups.items()) if len(v) > 1]
+    if multi_seed:
+        print("\nZero-shot average over calibration seeds (mean ± sample std)")
+        print("| Model | Method | Seeds | Avg accuracy (%) | Δ vs BF16 |")
+        print("|---|---|---|---|---|")
+        for (base, _, method), values in multi_seed:
+            ref = zeroshot.get(base, {}).get("average")
+            mean = statistics.mean(values)
+            delta = f"{mean - ref:+.2f}" if ref is not None else "–"
+            print(f"| {base} | {method} | {len(values)} | {mean:.2f} ± {statistics.stdev(values):.2f} | {delta} |")

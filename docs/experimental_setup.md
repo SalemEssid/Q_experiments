@@ -45,6 +45,14 @@ All experiments run on the same machine and software stack, so results are direc
 | W4A16 format | `W4A16_ASYM`: 4-bit integer weights with zero-point, group size 128, BF16 activations |
 | Exact algorithm settings | saved by llm-compressor as `recipe.yaml` inside each checkpoint folder |
 
+## Zero-shot accuracy protocol (`scripts/zeroshot_eval.py`)
+
+- **Tool:** lm-evaluation-harness (lm-eval), Hugging Face backend, in the `quant` environment. The model is loaded exactly as for perplexity (BF16, `device_map="cuda"`) and passed to lm-eval as an object. Group C codebases will pass their own model objects to the same function.
+- **Tasks:** ARC-Easy, ARC-Challenge, HellaSwag, PIQA, WinoGrande, BoolQ, the task set of the QuaRot, SpinQuant and DuQuant papers. 0-shot, lm-eval's default prompts.
+- **How it is scored:** for each question the model scores every answer option by its log-probability, and the most likely option is its answer. Nothing is generated.
+- **Metric:** `acc_norm` (accuracy with length-normalized probabilities) when the task has it (ARC-e, ARC-c, HellaSwag, PIQA), otherwise `acc` (WinoGrande, BoolQ). This is the rule used in QuaRot's evaluation code. The average is the plain mean over the six tasks.
+- **Uncertainty:** lm-eval reports a standard error per task (about 0.5–1.5 points here, depending on the task size). Differences between methods smaller than that need care.
+
 ## Speed and memory protocol (`scripts/bench_vllm.py`)
 
 All models run in vLLM with the same settings: `gpu_memory_utilization=0.85`, `max_model_len=2048`, prefix caching off, CUDA graphs and torch.compile at their defaults, greedy decoding with `ignore_eos` (every request produces exactly the requested number of tokens). Prompts are random token IDs of a fixed length, identical for every model.
