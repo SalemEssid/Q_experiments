@@ -10,9 +10,9 @@ Goal: smaller model, faster single-user generation.
 
 | Method | Implementation | Status |
 |---|---|---|
-| RTN (reference) | llm-compressor | 1B done, 3B running |
-| GPTQ | llm-compressor | 1B done, 3B running |
-| AWQ | llm-compressor | 1B done, 3B running |
+| RTN (reference) | llm-compressor | perplexity done (1B, 3B) |
+| GPTQ | llm-compressor | perplexity done (1B, 3B, 3 seeds) |
+| AWQ | llm-compressor | perplexity done (1B, 3B, 3 seeds) |
 
 Speed and memory: vLLM (Marlin W4A16 kernels).
 
@@ -84,3 +84,4 @@ These codebases simulate quantization (fake quant), so this group reports **accu
 | 2026-11-09 | RTN added as a reference in every group | Shows how much each method improves over plain rounding |
 | 2026-11-09 | SmoothQuant+ dropped | Salem's decision. Its official code was never released |
 | 2026-11-09 | QuaRot run with two implementations | Salem's decision: compare the official code against the SpinQuant-codebase version |
+| 2026-11-09 | Report calibration-based methods as mean ± std over 3 calibration seeds (0, 1, 2) | The seed study showed GPTQ's result can move by 0.29 PPL with the calibration samples alone; one seed can mislead |

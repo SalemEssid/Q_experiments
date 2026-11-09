@@ -91,6 +91,7 @@ minimize ‖W X − Ŵ X‖², where X are the layer's inputs on calibration dat
 **Observations:**
 - Llama-3.2-1B: PPL 10.610 (+8.7%). Recovers 56% of RTN's loss, the best of the three W4A16 methods. Quantization took 72 s, with a peak GPU memory of 2.3 GiB: llm-compressor moves one layer at a time to the GPU.
 - Llama-3.2-3B: PPL 8.241 (+5.4%). Recovers 37% of RTN's loss. 167 s, 2.7 GiB of GPU.
+- **Sensitive to the calibration samples.** Over 3 seeds: 1B 10.699 ± 0.165 (range 10.598–10.889), 3B 8.254 ± 0.011. This is expected from how GPTQ works: it solves a least-squares problem on the exact calibration inputs (it fits H = X Xᵀ), so it partly fits the particular samples. With an unlucky set (seed 1 on the 1B) it loses about a third of its improvement over RTN.
 
 ---
 
@@ -118,10 +119,11 @@ minimize ‖W X − Ŵ X‖², where X are the layer's inputs on calibration dat
 **Observations:**
 - Llama-3.2-1B: PPL 10.906 (+11.8%). Recovers 41% of RTN's loss, behind GPTQ. Quantization took 215 s and 9.2 GiB of GPU: 3× slower and 4× more memory than GPTQ, the **opposite** of the paper's cost claim.
 - Llama-3.2-3B: PPL 8.282 (+6.0%). Recovers 31%. 572 s, 11.6 GiB. The gap to GPTQ shrinks to 0.04 PPL.
+- **Very stable across calibration samples,** which confirms the paper's robustness claim. Over 3 seeds: 1B 10.907 ± 0.005 (about 30× less spread than GPTQ), 3B 8.281 ± 0.002 (5× less). AWQ only uses average activation magnitudes per channel to pick its scales, and these statistics barely change between sample sets. Trade-off seen so far: GPTQ is slightly more accurate on average, while AWQ is more predictable.
 - Why AWQ costs more here: it runs each block once per candidate scale (20 times) on all 262k calibration tokens and keeps the block inputs on the GPU. GPTQ needs one pass per layer to collect statistics. Our 2048-token samples (4× the tokens of AWQ's default 128 × 512) make this heavier.
 
 **Points for the report:**
-- Is GPTQ > AWQ also true on zero-shot tasks, and is the small 3B gap larger than the calibration-seed variation? AWQ's advantage in its paper is robustness to the calibration data, which WikiText-2 perplexity alone does not test.
+- Seed study answered: GPTQ is ahead in every seed but by a negligible 0.027 PPL on the 3B, and AWQ is far more stable across calibration sets. Still open: does the ranking hold on zero-shot tasks, which test more than WikiText-style text?
 - Possible extras: AWQ with the paper's calibration size (128 × 512) to test the cost claim, and the original AWQ code (with clipping) to measure what the missing step is worth.
 
 ---
