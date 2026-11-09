@@ -12,7 +12,7 @@ Hardware, software and measurement protocols: see [experimental_setup.md](experi
 
 | Model | Method | Format | WikiText-2 PPL ↓ | Zero-shot avg ↑ | Size on disk | Weights in GPU | KV cache (tokens) | Decode tok/s, 1 request ↑ | Throughput, 256 requests (out tok/s) ↑ | Quantization cost |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Llama-3.2-1B | BF16 baseline | W16A16 | 9.756 | pending | 2.30 GiB* | 2.32 GiB | 540k | 222 | 8,755 | – |
+| Llama-3.2-1B | BF16 baseline | W16A16 | 9.756 | 60.28 | 2.30 GiB* | 2.32 GiB | 540k | 222 | 8,755 | – |
 | Llama-3.2-1B | RTN (reference) | W4A16 | 11.709 | pending | 0.96 GiB | 0.99 GiB | 568k | 423 (1.91×) | 8,616 (0.98×) | 1.9 s, 0.06 GiB GPU |
 | Llama-3.2-1B | GPTQ | W4A16 | 10.699 ± 0.164 | pending | 0.96 GiB | 0.99 GiB | 570k | 425 (1.91×) | 8,673 (0.99×) | 72 s, 2.3 GiB GPU |
 | Llama-3.2-1B | AWQ | W4A16 | 10.907 ± 0.005 | pending | 0.96 GiB | 0.99 GiB | 568k | 425 (1.91×) | 8,633 (0.99×) | 215 s, 9.2 GiB GPU |
@@ -127,3 +127,4 @@ When one request generates tokens, every token requires reading all the weights 
 - 2026-11-09: calibration-seed study (`scripts/run_seed_study.sh`), GPTQ and AWQ with seeds 1 and 2 on both models. 1B GPTQ 10.889 / 10.598, AWQ 10.913 / 10.903; 3B GPTQ 8.260 / 8.261, AWQ 8.2817 / 8.2776. Mean ± std (summarize.py): 1B GPTQ 10.699 ± 0.164, AWQ 10.907 ± 0.005; 3B GPTQ 8.254 ± 0.011, AWQ 8.280 ± 0.003.
 - 2026-11-09: vLLM 0.32.0+cu129 environment working (torchcodec removed, FlashInfer sampler off). `vllm_check.py`: GPTQ loads with MarlinLinearKernel (CompressedTensorsWNA16), weights 0.99 GiB vs 2.32 GiB BF16. Greedy sample from GPTQ in vLLM is word-for-word identical to the one from Hugging Face.
 - 2026-11-09: speed benchmark (`scripts/run_speed_bench.sh`) for BF16, RTN, GPTQ, AWQ on 1B and 3B. Decode speedup 1.91× (1B) and 2.34× (3B); prefill 0.93–0.96×; throughput 0.98–1.02×. GPU probe 101–107 TFLOPS around every run.
+- 2026-11-09: lm-eval 0.4.13 installed in the quant venv (torch and transformers unchanged). Test run, Llama-3.2-1B BF16 zero-shot: ARC-e 61.78, ARC-c 36.60, HellaSwag 64.24, PIQA 74.59 (acc_norm); WinoGrande 60.93, BoolQ 63.55 (acc). Average 60.28. Took 244 s.

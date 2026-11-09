@@ -25,6 +25,7 @@ All experiments run on the same machine and software stack, so results are direc
 | transformers | 5.21.0 (set by llm-compressor; baselines re-run with this version) |
 | llm-compressor | 0.15.0 (GPTQ, AWQ, SmoothQuant) |
 | compressed-tensors | 0.20.1 (checkpoint format) |
+| lm-eval | 0.4.13 (zero-shot tasks) |
 
 ### vLLM environment (speed and memory measurements)
 

@@ -10,7 +10,10 @@ for size in 1B 3B; do
     models="$models models/Llama-3.2-$size-$m-W4A16_ASYM-seed1 models/Llama-3.2-$size-$m-W4A16_ASYM-seed2"
   done
   for model in $models; do
-    python scripts/zeroshot_eval.py --model "$model" 2>&1 | tee "logs/zeroshot_$(basename "$model").log"
+    name=$(basename "$model")
+    # Skip models already evaluated, so the script can be restarted after an interruption.
+    if [ -f "results/zeroshot/$name.json" ]; then echo "skip $name (already done)"; continue; fi
+    python scripts/zeroshot_eval.py --model "$model" 2>&1 | tee "logs/zeroshot_$name.log"
   done
 done
 python scripts/summarize.py
