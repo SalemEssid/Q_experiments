@@ -54,7 +54,9 @@ def evaluate_zeroshot(model, tokenizer, batch_size=32, tasks=TASKS):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True, help="Hugging Face model ID or local folder")
-    parser.add_argument("--batch-size", type=int, default=32)
+    # 16, not 32: lm-eval computes log-probabilities over the whole 128k vocabulary for every token in a
+    # batch (about 4.5 GiB at batch 16 for the longest questions), which ran out of memory on the 3B at 32.
+    parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--out-dir", default="results/zeroshot")
     args = parser.parse_args()
 
@@ -69,6 +71,7 @@ def main():
     result = {
         "model": args.model,
         "num_fewshot": 0,
+        "batch_size": args.batch_size,
         "tasks": scores,
         "average": average,
         "eval_seconds": round(elapsed, 1),
