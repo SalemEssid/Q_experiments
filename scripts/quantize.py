@@ -37,6 +37,7 @@ parser.add_argument(
 )
 parser.add_argument("--n-samples", type=int, default=128)
 parser.add_argument("--seqlen", type=int, default=2048)
+parser.add_argument("--seed", type=int, default=0, help="which random calibration samples to use (0 = our standard set)")
 args = parser.parse_args()
 
 
@@ -59,13 +60,13 @@ def build_recipe(method, scheme):
 
 
 model_name = Path(args.model).name
-run_name = f"{model_name}-{args.method.upper()}-{args.scheme}"
+run_name = f"{model_name}-{args.method.upper()}-{args.scheme}" + (f"-seed{args.seed}" if args.seed else "")
 save_dir = Path("models") / run_name
 
 tokenizer = AutoTokenizer.from_pretrained(args.model)
 # Loaded on the CPU on purpose: llm-compressor moves one layer at a time to the GPU.
 model = AutoModelForCausalLM.from_pretrained(args.model, dtype=torch.bfloat16)
-calib = get_calibration_data(tokenizer, model_name, args.n_samples, args.seqlen)
+calib = get_calibration_data(tokenizer, model_name, args.n_samples, args.seqlen, seed=args.seed)
 
 # Quantization cost: time and memory of the algorithm itself (not loading or saving the model).
 torch.cuda.reset_peak_memory_stats()
@@ -96,7 +97,8 @@ result = {
     "model": args.model,
     "method": args.method,
     "scheme": args.scheme,
-    "calibration": f"C4, {args.n_samples} x {args.seqlen} tokens, seed 0",
+    "calibration": f"C4, {args.n_samples} x {args.seqlen} tokens, seed {args.seed}",
+    "seed": args.seed,
     "quant_seconds": round(quant_seconds, 1),
     "peak_gpu_gib": round(peak_gpu_gib, 2),
     "peak_cpu_ram_gib": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20, 2),

@@ -22,6 +22,8 @@ for run, r in ppl.items():
     base_ppl = ppl.get(base_name, {}).get("ppl")
     rtn_ppl = ppl.get(f"{base_name}-RTN-{q['scheme']}", {}).get("ppl") if q else None
     method = q["method"].upper() if q else "BF16"
+    seed = q.get("seed", 0) if q else 0
+    label = method + (f" (seed {seed})" if seed else "")
 
     delta = f"{r['ppl'] - base_ppl:+.3f}" if q and base_ppl else "–"
     # Share of RTN's perplexity loss that the method wins back (0% = RTN, 100% = BF16).
@@ -34,7 +36,7 @@ for run, r in ppl.items():
         (
             base_name,
             METHOD_ORDER.get(method, 9),
-            f"| {base_name} | {method} | {q['scheme'] if q else 'BF16'} | {r['ppl']:.3f} | {delta} | {recovered} "
+            f"| {base_name} | {label} | {q['scheme'] if q else 'BF16'} | {r['ppl']:.3f} | {delta} | {recovered} "
             f"| {q['size_on_disk_gib'] if q else '–'} | {q['quant_seconds'] if q else '–'} "
             f"| {q['peak_gpu_gib'] if q else '–'} |",
         )
