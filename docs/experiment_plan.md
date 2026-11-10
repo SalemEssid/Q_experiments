@@ -10,20 +10,31 @@ Goal: smaller model, faster single-user generation.
 
 | Method | Implementation | Status |
 |---|---|---|
-| RTN (reference) | llm-compressor | perplexity, speed, memory done (1B, 3B); zero-shot pending |
-| GPTQ | llm-compressor | perplexity (3 seeds), speed, memory done (1B, 3B); zero-shot pending |
-| AWQ | llm-compressor | perplexity (3 seeds), speed, memory done (1B, 3B); zero-shot pending |
+| RTN (reference) | llm-compressor | done (1B, 3B): perplexity, zero-shot, speed, memory |
+| GPTQ | llm-compressor | done (1B, 3B; 3 seeds): perplexity, zero-shot, speed, memory |
+| AWQ | llm-compressor | done (1B, 3B; 3 seeds): perplexity, zero-shot, speed, memory |
 
 Speed and memory: vLLM (Marlin W4A16 kernels).
 
 ## Group B: 8-bit weights and activations (W8A8 INT8)
 
-Goal: faster high-load serving (INT8 math). FP8 is not available on the A40.
+Goal: faster prefill and high-load serving (INT8 math). FP8 is not available on the A40.
+
+Two activation formats, both INT8 symmetric, with the same weights (INT8 symmetric, one scale per output channel):
+
+| Scheme | Activation scale | Why |
+|---|---|---|
+| `W8A8` (main) | one per token, computed at run time (dynamic) | llm-compressor's standard W8A8 preset and what vLLM serves. A per-token scale already limits the damage of outliers, so RTN may already be close to BF16 |
+| `W8A8_STATIC` (second step) | one per layer, fixed from calibration (static) | The setting SmoothQuant was designed for: one fixed scale lets a single outlier channel squeeze every token, so RTN should suffer and smoothing should matter. Cheaper at inference (no scale computation) |
 
 | Method | Implementation | Status |
 |---|---|---|
-| RTN W8A8 (reference) | llm-compressor | planned |
-| SmoothQuant | llm-compressor | planned |
+| RTN W8A8 (reference) | llm-compressor `QuantizationModifier` | code ready |
+| SmoothQuant (α = 0.5) + RTN | llm-compressor `SmoothQuantModifier` + `QuantizationModifier` | code ready |
+| SmoothQuant α = 0.8 (sensitivity check) | same, `--alpha 0.8` | code ready |
+| RTN and SmoothQuant with `W8A8_STATIC` | same, `--scheme W8A8_STATIC` | code ready |
+
+Steps: (1) RTN W8A8 on the 1B and check that activations really are quantized in evaluation; (2) SmoothQuant on the 1B; (3) both models, 3 seeds for SmoothQuant, zero-shot; (4) static activations; (5) vLLM speed.
 
 Speed and memory: vLLM (INT8 kernels).
 
@@ -85,3 +96,8 @@ These codebases simulate quantization (fake quant), so this group reports **accu
 | 2026-11-09 | SmoothQuant+ dropped | Salem's decision. Its official code was never released |
 | 2026-11-09 | QuaRot run with two implementations | Salem's decision: compare the official code against the SpinQuant-codebase version |
 | 2026-11-09 | Report calibration-based methods as mean ± std over 3 calibration seeds (0, 1, 2) | The seed study showed GPTQ's result can move by 0.29 PPL with the calibration samples alone; one seed can mislead |
+| 2026-11-10 | Zero-shot batch size 16 for every model | Batch 32 ran out of memory on the 3B. Batch size shifts the 1B averages by −0.26 to +0.16 points, so it must be the same for all models |
+| 2026-11-10 | SmoothQuant rounds the weights with RTN, not GPTQ (llm-compressor's example uses GPTQ) | The paper uses RTN. With RTN, the difference to the RTN W8A8 reference comes from smoothing alone. 8-bit weights lose little with RTN, so GPTQ would add little |
+| 2026-11-10 | SmoothQuant α = 0.5 as the main setting, α = 0.8 as a sensitivity check | 0.5 is the paper's and llm-compressor's default, fixed before seeing results, so α is not tuned on the test set. 0.8 is the value in llm-compressor's Llama W8A8 example |
+| 2026-11-10 | Two activation formats: dynamic per-token (main) and static per-tensor | With per-token scales RTN may already be near lossless, which would hide what SmoothQuant does. The static format is the case it was built for |
+| 2026-11-10 | RTN W8A8 (dynamic) runs once, not with 3 seeds | It uses no calibration data: weight scales come from the weights, activation scales from each token at run time |

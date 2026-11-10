@@ -135,7 +135,7 @@ minimize ‖W X − Ŵ X‖², where X are the layer's inputs on calibration dat
 
 ---
 
-## 6. SmoothQuant (planned)
+## 6. SmoothQuant (in progress)
 
 **Paper:** Xiao, Lin, Seznec, Wu, Demouth, Han. *SmoothQuant: Accurate and Efficient Post-Training Quantization for Large Language Models*, ICML 2023.
 
@@ -148,7 +148,19 @@ Y = (X · diag(s)⁻¹) · (diag(s) · W), with s_j = max|X_j|^α / max|W_j|^(1�
 3. Fold diag(s)⁻¹ into the previous RMSNorm and diag(s) into the weights. The model is exactly equivalent before quantization.
 4. Quantize weights per channel and activations per token to INT8. The matrix multiply then runs on INT8 tensor cores.
 
-**How we will run it:** llm-compressor `SmoothQuantModifier(smoothing_strength=0.8)` + `GPTQModifier(scheme="W8A8")`: INT8 per-channel weights, INT8 dynamic per-token activations. Note that llm-compressor's example rounds the weights with GPTQ, while the paper uses RTN. A possible extra is to run both and separate the effect of smoothing from the effect of GPTQ.
+**Paper's quantization levels (check the exact table before quoting):** O1 to O3 go from finer to coarser activation scales: per-token dynamic, per-tensor dynamic, per-tensor static. Coarser is faster but harder. The paper's main point is that smoothing makes even the coarse static setting work.
+
+**How we run it:** llm-compressor 0.15.0 `SmoothQuantModifier(smoothing_strength=α)` followed by `QuantizationModifier` (RTN, as in the paper). Details from the 0.15.0 source code:
+- **Two smoothing points per layer on Llama:** `input_layernorm` → q/k/v_proj and `post_attention_layernorm` → gate/up_proj. The scale is folded into the RMSNorm weight. The inputs of `o_proj` and `down_proj` are **not** smoothed, because no norm sits directly before them. On Llama, `down_proj`'s input is known to have the largest outliers, so this is a limitation to keep in mind when reading the results.
+- **Activation statistic:** the largest absolute value of each channel over all calibration tokens (a running min/max hook on the norm output).
+- **Scale formula:** s_j = max|X_j|^α / (2 · max|W_j|)^(1−α), with the weight maximum taken over all layers that share the input (q, k and v together). The factor 2 multiplies every channel's scale by the same constant, which changes neither per-token nor per-channel INT8 rounding.
+- **α = 0.5** (paper and llm-compressor default) as the main setting, decided in advance. **α = 0.8** (llm-compressor's Llama W8A8 example) as a sensitivity check.
+- **Formats:**
+  - `W8A8` preset: INT8 symmetric weights with one scale per output channel, INT8 symmetric activations with one scale per token computed at run time. This is finer than any of the paper's levels.
+  - `W8A8_STATIC` (our custom scheme): the same weights, with one fixed activation scale per layer measured on the calibration data (llm-compressor's default `minmax` observer, a moving average over calibration batches). This is close to the paper's O3, except that our weights are per channel.
+- llm-compressor's own W8A8 example rounds the weights with GPTQ instead. We use RTN so that the only difference to the RTN reference is the smoothing (decision log, 2026-11-10).
+
+**How accuracy is measured for W8A8:** when Hugging Face loads the checkpoint, compressed-tensors replaces each quantized Linear layer's forward function with one that rounds the input activations to INT8 before the multiply (fake quantization; `set_forward_quantized` in compressed-tensors 0.20.1). `ppl_eval.py` proves this on every run: it scores the first window with activation quantization on and off, and the two losses must differ. "Off" keeps the 8-bit weights, so it also separates the weight error from the activation error.
 
 ---
 

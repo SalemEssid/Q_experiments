@@ -63,6 +63,12 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = AutoModelForCausalLM.from_pretrained(args.model, dtype=torch.bfloat16, device_map="cuda")
     model.eval()
+    # W8A8 models: number of layers whose input activations are rounded to INT8 (0 for BF16 and W4A16).
+    act_layers = sum(
+        1 for m in model.modules()
+        if getattr(getattr(m, "quantization_scheme", None), "input_activations", None)
+    )
+    print("Layers with activation quantization:", act_layers)
 
     start = time.perf_counter()
     scores, average = evaluate_zeroshot(model, tokenizer, args.batch_size)
@@ -72,6 +78,7 @@ def main():
         "model": args.model,
         "num_fewshot": 0,
         "batch_size": args.batch_size,
+        "activation_quant_layers": act_layers,
         "tasks": scores,
         "average": average,
         "eval_seconds": round(elapsed, 1),

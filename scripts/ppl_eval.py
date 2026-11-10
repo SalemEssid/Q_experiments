@@ -35,6 +35,28 @@ ids = tokenizer("\n\n".join(test["text"]), return_tensors="pt").input_ids
 n_windows = ids.shape[1] // args.seqlen  # the leftover tokens at the end are dropped
 print(f"{ids.shape[1]:,} tokens -> {n_windows} windows of {args.seqlen} tokens")
 
+# W8A8 check: compressed-tensors gives every quantized Linear layer a forward function that rounds its
+# input activations to INT8 before the matrix multiply (fake quantization). Prove it is active by scoring
+# the first window with activation quantization on and off: the losses must differ. "Off" keeps the
+# 8-bit weights, so it also shows how much of the error comes from the weights alone.
+act_layers = [
+    m for m in model.modules() if getattr(getattr(m, "quantization_scheme", None), "input_activations", None)
+]
+act_check = None
+if act_layers:
+    first = ids[:, : args.seqlen].to(model.device)
+    with torch.inference_mode():
+        loss_on = model(first, labels=first, use_cache=False).loss.item()
+        for m in act_layers:
+            m.quantization_enabled = False
+        loss_off = model(first, labels=first, use_cache=False).loss.item()
+        for m in act_layers:
+            m.quantization_enabled = True
+    act_check = {"layers": len(act_layers), "first_window_loss_act_on": round(loss_on, 5),
+                 "first_window_loss_act_off": round(loss_off, 5)}
+    print(f"Activation quantization in {len(act_layers)} layers. First-window loss: "
+          f"{loss_on:.5f} with it, {loss_off:.5f} without it (must differ)")
+
 nlls = []
 start = time.perf_counter()
 with torch.inference_mode():  # no gradients needed: we only evaluate
@@ -55,6 +77,7 @@ result = {
     "seqlen": args.seqlen,
     "n_windows": n_windows,
     "ppl": round(ppl, 4),
+    "activation_quant_check": act_check,  # None for BF16 and weight-only (W4A16) models
     "eval_seconds": round(elapsed, 1),
     "torch": torch.__version__,
     "transformers": transformers.__version__,
