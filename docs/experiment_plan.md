@@ -44,9 +44,10 @@ Goal: the most aggressive format. Activation outliers must be removed first (rot
 
 | Method | Implementation | Status |
 |---|---|---|
-| RTN W4A4 (reference) | SpinQuant codebase, no rotation | planned |
+| BF16 in each codebase | must reproduce 9.756 / 7.817 | SpinQuant code: done (9.761 / 7.817) |
+| RTN W4A4 (reference) | SpinQuant codebase, no rotation | next: `run_groupC_rtn.sh` |
 | QuaRot (official) | Official spcl/QuaRot, ported to Llama-3.2 (its transformers 4.38 pin and model whitelist exclude it) | planned |
-| QuaRot (via SpinQuant code) | SpinQuant codebase with random Hadamard rotations and no training: the same algorithm in a different codebase | planned |
+| QuaRot (via SpinQuant code) | SpinQuant codebase with random Hadamard rotations and no training: the same algorithm in a different codebase | RTN weights, 3 rotation seeds: next (`run_groupC_rtn.sh`). GPTQ weights: after the C4 calibration patch |
 | SpinQuant | Official facebookresearch/SpinQuant (transformers 4.44.2, has Llama-3.2 support) | planned |
 | DuQuant | Official Hsu1023/DuQuant, ported to a newer transformers version (its pinned 4.35.2 cannot load Llama-3.2) | planned |
 
@@ -106,3 +107,6 @@ These codebases simulate quantization (fake quant), so this group reports **accu
 | 2026-11-10 | SpinQuant environment: PyTorch 2.7.1+cu126 with SpinQuant's pinned transformers 4.44.2, and fast-hadamard-transform from a prebuilt wheel | No compiling, so the nvcc 12.0 / gcc 13.2 problem is avoided. 2.7 is the oldest PyTorch whose C++ ABI matches the prebuilt 1.1 wheels (2.6 failed: its wheels use the old ABI, and the wheel labelled for it is in fact built with the new one). Keep transformers at SpinQuant's pin, because its code contains its own copy of the 4.44 Llama model. If 2.7 clashes with transformers 4.44.2, the fallback is to compile fast-hadamard-transform for an older PyTorch with a home-folder CUDA toolkit |
 | 2026-11-10 | SpinQuant code pinned to commit `8f47aa3` | Reproducibility: the results must be traceable to the exact code |
 | 2026-11-10 | Changes to official code only through `scripts/patch_spinquant.sh`, each one justified in experimental_setup.md. First change: gloo instead of NCCL | NCCL cannot start on the vGPU. Keeping every change in one script makes the difference to the official code visible (`git diff`) and repeatable |
+| 2026-11-10 | Group C settings for every method: weights 4-bit symmetric per output channel with clipping search; activations 4-bit asymmetric per token (lm_head BF16); KV cache 4-bit asymmetric, one scale per token and head | The settings of SpinQuant's own scripts (`--w_clip --a_asym --k_asym --v_asym`), which reports Llama results. KV group = head_dim (64 on the 1B, 128 on the 3B) instead of the scripts' 128, because SpinQuant only accepts head_dim or per-token groups for the keys, and values always use head_dim. The official QuaRot and DuQuant runs will be set to match these flags |
+| 2026-11-10 | Group C differences are measured against the BF16 result of the same codebase | Removes small evaluation offsets between codebases (SpinQuant's BF16 is 9.761 vs our 9.756 on the 1B) |
+| 2026-11-10 | RTN weights first (BF16, RTN without rotation, QuaRot-RTN with 3 rotation seeds), GPTQ weights after | RTN needs no calibration data, so these runs work before SpinQuant's calibration loader is switched from WikiText-2 to our C4 samples. They show what the rotation alone does |

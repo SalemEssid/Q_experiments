@@ -439,6 +439,20 @@ Activation measurements (`scripts/act_stats.py`, BF16 Llama-3.2-1B, WikiText-2 t
 - In block 1 the ratio (1420) is far above 254, so with a scale set by the extreme, every ordinary token's `down_proj` input rounds to zero, as on the 1B. (This assumes the calibrated 3B scales again match the measured maxima; they were only checked on the 1B.)
 - **Why the 3B is less broken (hypothesis, not tested):** it has one extreme layer fewer, the extremes of its last block are milder (ratio 60 vs 82), and with 28 blocks a single zeroed MLP output is a smaller part of the whole computation. The 3B's ordinary tokens are also more even: without the extreme token, every block's ratio is 4–10, against up to 65 on the 1B.
 
+## Group C: W4A4KV4 (in progress)
+
+Research codebases with simulated (fake) quantization: accuracy and quantization cost only (experiment_plan.md). Settings for every method: experiment_plan.md, decision log 2026-11-10.
+
+### Each codebase must reproduce our BF16 perplexity first (fairness rule 2)
+
+| Model | Our protocol (`ppl_eval.py`) | SpinQuant code (`ptq.py`, 16 bits everywhere, no rotation) | Difference |
+|---|---|---|---|
+| Llama-3.2-1B | 9.7564 | 9.7610 | +0.0046 (+0.05%) |
+| Llama-3.2-3B | 7.8171 | 7.8173 | +0.0002 (+0.003%) |
+
+- **Reproduced.** Both use the same text (289,076 tokens = 141 windows of 2048, no BOS token). The small 1B difference probably comes from BF16 rounding: SpinQuant runs its own copy of the transformers 4.44 Llama model, with batch size 4 and PyTorch 2.7, while we use transformers 5.21, batch size 1 and PyTorch 2.14. 0.05% is far below the differences group C is about.
+- **To remove even this offset,** group C differences are measured against the BF16 result of the same codebase.
+
 ## Log
 
 - 2026-11-09: Llama-3.2-1B BF16, PPL 9.7564 (141 windows, torch 2.14.1+cu126, transformers 5.22.2). Matches the published value of about 9.76.
@@ -467,3 +481,4 @@ Activation measurements (`scripts/act_stats.py`, BF16 Llama-3.2-1B, WikiText-2 t
 - 2026-11-10: zero-shot of all W8A8 models (batch 16). 1B: RTN 59.95, SQ α=0.5 60.52 / 60.41 / 60.50, α=0.8 60.24. 3B: RTN 68.38, SQ α=0.5 68.65 / 68.41 / 68.45, α=0.8 68.78.
 - 2026-11-10: vLLM speed for W8A8 (`run_speed_groupB.sh`; RTN, SQ α=0.5 seed 0, RTN static). 1B RTN: TPOT 3.449 ms (1.31×), prefill 57,386 tok/s (1.32×), throughput 10,242 out tok/s (1.17×), 1.41 GiB weights, 557k KV tokens. 3B RTN: 7.674 ms (1.46×), 23,428 (1.40×), 3,064 (1.21×), 3.45 GiB, 132k. SQ and static within 1% of RTN. GPU probe 103.9–108.0 TFLOPS. vLLM kernel: `CutlassInt8ScaledMMLinearKernel`; `max_num_batched_tokens=8192`.
 - 2026-11-10: `int8_matmul_test.py` (vllm venv). Square 8192 matmul: BF16 108.6 TFLOPS, INT8 CUTLASS 199.3 TOPS, INT8 raw cuBLAS 222.0 TOPS (105.5 / 197.3 at the end). At 8192 tokens per step, INT8 matmul speedups over BF16 are 1.36–1.76× per layer; all layers with quantization 1.34× (1B) and 1.43× (3B). Prefill split, W8A8: INT8 matmuls 69% / 75%, quantization 7% / 6%, everything else 24% / 18%. At 256 tokens: all layers 1.00× (1B), 1.30× (3B).
+- 2026-11-10: group C started. `spinquant` venv (PyTorch 2.7.1+cu126, transformers 4.44.2, fast-hadamard-transform 1.1.0 wheel; Hadamard check error 2.1e-4). NCCL fails on the vGPU (`cudaMemPoolCreate`: operation not supported), so SpinQuant was patched to gloo. SpinQuant BF16 (`run_spinquant_bf16.sh`): 1B PPL 9.7610, 3B 7.8173.

@@ -199,6 +199,12 @@ Y = (X · diag(s)⁻¹) · (diag(s) · W), with s_j = max|X_j|^α / max|W_j|^(1�
 **Expected differences to watch for:** default settings (symmetric vs asymmetric activations and KV cache, KV group size, weight clipping), how the random Hadamard is generated, GPTQ details (act-order, dampening), calibration loaders, and evaluation code. We align the settings flag by flag and use the same calibration samples. Remaining differences point to implementation details.
 **Rotation seed:** SpinQuant's paper reports that different random rotations give quite different accuracy, so we run several seeds and report the spread.
 
+**QuaRot inside SpinQuant's code, details (commit `8f47aa3`):**
+- **How to run it:** `--rotate --rotate_mode hadamard` without `--optimized_rotation_path`. Then `rotate_model` draws a random Hadamard matrix for R1 (hidden size) and a new one for R2 in every layer (head size). The online Hadamards before `down_proj` and on the keys are added as well.
+- **Random Hadamard** = a Hadamard matrix times a random ±1 diagonal (QuIP#'s construction). The signs come from `torch.randint` with the global random state, which `ptq_model` seeds with `--seed`. **`--rotation_seed` is never used,** so a different `--seed` gives a different rotation.
+- **Hidden size 3072 (3B) is not a power of two.** SpinQuant's Hadamard code handles it as a 12 × 256 Kronecker product (`get_had12`). Hidden size 2048, head sizes 64/128 and `down_proj`'s 8192 are powers of two.
+- **KV-cache groups:** the keys accept only one scale per token (`k_groupsize` −1) or per token and head (`k_groupsize` = head_dim). Values always use head_dim.
+
 ---
 
 ## 8. SpinQuant (planned)
