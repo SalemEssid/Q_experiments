@@ -29,12 +29,12 @@ Two activation formats, both INT8 symmetric, with the same weights (INT8 symmetr
 
 | Method | Implementation | Status |
 |---|---|---|
-| RTN W8A8 (reference) | llm-compressor `QuantizationModifier` | done (1B, 3B): perplexity, zero-shot. Speed: next |
-| SmoothQuant (α = 0.5) + RTN | llm-compressor `SmoothQuantModifier` + `QuantizationModifier` | done (1B, 3B; 3 seeds): perplexity, zero-shot. Speed: next |
+| RTN W8A8 (reference) | llm-compressor `QuantizationModifier` | done (1B, 3B): perplexity, zero-shot, speed, memory |
+| SmoothQuant (α = 0.5) + RTN | llm-compressor `SmoothQuantModifier` + `QuantizationModifier` | done (1B, 3B; 3 seeds): perplexity, zero-shot, speed, memory |
 | SmoothQuant α = 0.8 (sensitivity check) | same, `--alpha 0.8` | done (1B, 3B; seed 0): perplexity, zero-shot |
-| RTN and SmoothQuant with `W8A8_STATIC` | same, `--scheme W8A8_STATIC` | done as a diagnosis: broken on both models (1B ≈ 1300, 3B 60.6), cause found (massive activations in `down_proj`) |
+| RTN and SmoothQuant with `W8A8_STATIC` | same, `--scheme W8A8_STATIC` | done as a diagnosis: broken on both models (1B ≈ 1300, 3B 60.6), cause found (massive activations in `down_proj`). RTN static speed measured: within 1% of per-token |
 
-Steps: (1) RTN W8A8 on the 1B and check that activations really are quantized in evaluation ✓; (2) SmoothQuant on the 1B ✓; (3) static activations and diagnosis ✓; (4) both models, 3 seeds for SmoothQuant, zero-shot ✓ (`run_groupB.sh`); (5) vLLM speed (`run_speed_groupB.sh`).
+Steps: (1) RTN W8A8 on the 1B and check that activations really are quantized in evaluation ✓; (2) SmoothQuant on the 1B ✓; (3) static activations and diagnosis ✓; (4) both models, 3 seeds for SmoothQuant, zero-shot ✓ (`run_groupB.sh`); (5) vLLM speed ✓ (`run_speed_groupB.sh`). **Group B is complete.**
 
 Speed and memory: vLLM (INT8 kernels).
 
@@ -73,7 +73,7 @@ These codebases simulate quantization (fake quant), so this group reports **accu
 
 ## Known risks
 
-- **Compiling CUDA code** (fast-hadamard-transform for QuaRot and SpinQuant, CUTLASS kernels for QuaRot): the server's nvcc 12.0 does not support gcc 13.2. Possible fixes: a newer CUDA toolkit installed in the home folder (no sudo needed), or gcc 12. Test this first when starting group C.
+- **Compiling CUDA code** (fast-hadamard-transform for QuaRot and SpinQuant, CUTLASS kernels for QuaRot): the server's nvcc 12.0 does not support gcc 13.2. For fast-hadamard-transform this is avoided with a prebuilt wheel (v1.1.0.post2 has wheels for PyTorch 2.6–2.10 with CUDA 12, Python 3.11). Official QuaRot's own CUTLASS kernels still need compiling. Possible fixes: a newer CUDA toolkit installed in the home folder (no sudo needed), or gcc 12.
 - **Official QuaRot needs porting:** transformers 4.38 cannot read Llama-3.2's "llama3" RoPE scaling (added in 4.43), Llama-3.2 is not in its model whitelist, and Llama-3.2's tied embeddings must be untied before rotating (SpinQuant already does this). Its zero-shot code uses an old lm-eval API.
 - **DuQuant needs porting:** same transformers problem (pinned 4.35.2).
 - **SpinQuant rotation training** is configured for 8 GPUs. On one GPU we use gradient accumulation to keep the same effective batch. Memory needs for the 3B are unknown.
@@ -102,3 +102,5 @@ These codebases simulate quantization (fake quant), so this group reports **accu
 | 2026-11-10 | Two activation formats: dynamic per-token (main) and static per-tensor | With per-token scales RTN may already be near lossless, which would hide what SmoothQuant does. The static format is the case it was built for |
 | 2026-11-10 | RTN W8A8 (dynamic) runs once, not with 3 seeds | It uses no calibration data: weight scales come from the weights, activation scales from each token at run time |
 | 2026-11-10 | Group B main results use per-token (dynamic) activation scales. Static scales are reported as a diagnosis, without seeds or zero-shot | Static scales break Llama-3.2 (PPL ≈ 1300) with or without SmoothQuant, because of massive activations in `down_proj`'s input. Running seeds and tasks on a broken model would add nothing |
+| 2026-11-10 | SpinQuant environment: PyTorch 2.6.0+cu124 with SpinQuant's pinned transformers 4.44.2, and fast-hadamard-transform from a prebuilt wheel | 2.6 is the oldest PyTorch with a prebuilt fast-hadamard-transform 1.1 wheel. No compiling, so the nvcc 12.0 / gcc 13.2 problem is avoided. Keep transformers at SpinQuant's pin, because its code contains its own copy of the 4.44 Llama model. Fallback if 2.6 clashes with transformers 4.44.2: PyTorch 2.2 with the 1.0.4.post1 wheel (CUDA 12.2 build) |
+| 2026-11-10 | SpinQuant code pinned to commit `8f47aa3` | Reproducibility: the results must be traceable to the exact code |

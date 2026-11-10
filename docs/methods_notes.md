@@ -136,7 +136,7 @@ minimize ‖W X − Ŵ X‖², where X are the layer's inputs on calibration dat
 
 ---
 
-## 6. SmoothQuant (accuracy done; speed next)
+## 6. SmoothQuant (done)
 
 **Paper:** Xiao, Lin, Seznec, Wu, Demouth, Han. *SmoothQuant: Accurate and Efficient Post-Training Quantization for Large Language Models*, ICML 2023.
 
@@ -169,6 +169,7 @@ Y = (X · diag(s)⁻¹) · (diag(s) · W), with s_j = max|X_j|^α / max|W_j|^(1�
 - α=0.8: 1B 9.890 (equal to RTN), 3B 7.881. On the 3B it wins back 11% of RTN's loss (activation loss +0.066 → +0.056). This is the only case where smoothing helped with per-token scales, and it is small. One seed.
 - **Very stable across calibration seeds** (PPL std 0.001–0.003, zero-shot std 0.06–0.13), like AWQ: both use only per-channel activation sizes.
 - Quantization takes 28 s (1B) and 65 s (3B), with 2.1–2.5 GiB of GPU memory (one calibration pass to collect the channel ranges).
+- **Speed (vLLM): the same as RTN W8A8** (within 1%), because the smoothing is folded into the norms and weights. Against BF16: prefill 1.31× / 1.39×, throughput 1.17× / 1.21×, single-request generation 1.30× / 1.46× (1B / 3B).
 - The error split shows why it cannot gain much: RTN's loss is mostly activations (+0.109 of +0.132), but smoothing leaves that part unchanged (+0.108 at α=0.8) while adding a little weight loss (+0.026 vs +0.023).
 - **Confirmed by the layer test:** `down_proj`'s input causes 70% of RTN's activation loss, and SmoothQuant cannot smooth it on Llama (its cost stays 0.076–0.077). In the layers it does smooth, it made the activation loss *larger* (q/k/v 0.013 → 0.022, gate/up 0.009 → 0.022).
 - **Static per-layer activation scales (`W8A8_STATIC`) break the model:** PPL about 1300 for RTN and for both α. SmoothQuant does not rescue the setting it was designed for, on this model. **Cause, confirmed:** massive activations in `down_proj`'s input (block 1: one value 2613× an ordinary token's range, at the first position of the window). With BF16 `down_proj` inputs the static models are back to 9.99 (RTN) and 9.93 (SQ). See section 10d.
@@ -215,6 +216,14 @@ Y = (X · diag(s)⁻¹) · (diag(s) · W), with s_j = max|X_j|^α / max|W_j|^(1�
 
 **How we will run it:** official facebookresearch/SpinQuant, which handles Llama-3.2's tied embeddings. One GPU with gradient accumulation instead of the authors' 8 GPUs. Rotation training on our C4 samples, not WikiText-2.
 
+**Details from the code (commit `8f47aa3`, read before running; to confirm while running):**
+- **Tied embeddings:** for Llama-3.2, `ptq.py` unties them by copying the embedding into a separate `lm_head`, so the two can be rotated differently.
+- **Calibration data:** GPTQ calibration (`data_utils.get_wikitext2`) uses 128 random 2048-token windows of **WikiText-2 train**, the same corpus as the evaluation. We must replace it with our C4 samples (fairness rule 1).
+- **Activation group sizes:** `o_proj`'s input is quantized in groups of one head (`head_dim` values share a scale), which is finer than one scale per token. All other inputs use the `--a_groupsize` setting (default −1 = one scale per token). `lm_head`'s input stays in 16 bits. Check the official QuaRot code does the same, otherwise the two QuaRot implementations differ here.
+- **The authors' scripts use asymmetric activations and KV cache** (`--a_asym --k_asym --v_asym`, KV groups of 128) and weight clipping (`--w_clip`, a search for the best clip ratio).
+- **Without `--rotate`** the same code gives the RTN / GPTQ W4A4 reference with no rotation.
+- **Evaluation:** WikiText-2 test joined with "\n\n", no BOS token, non-overlapping 2048-token windows. That is the same protocol as ours, so the BF16 perplexity should match 9.756 / 7.817.
+
 ---
 
 ## 9. DuQuant (planned)
@@ -241,12 +250,15 @@ Y = (X · diag(s)⁻¹) · (diag(s) · W), with s_j = max|X_j|^α / max|W_j|^(1�
 - The research codebases (QuaRot, SpinQuant, DuQuant) simulate quantization: values are rounded, but the math stays in 16 bits. Accuracy is valid; speed is not.
 - vLLM runs our W4A16 checkpoints with the **Marlin** kernel: it reads the packed 4-bit weights, unpacks them to BF16 in fast on-chip memory and multiplies in BF16. Greedy output is word-for-word the same as Hugging Face's, so the speed and accuracy numbers describe the same model.
 
-## 10b. What the W4A16 speed results teach (for the discussion section)
+## 10b. What the speed results teach (for the discussion section)
 
 - **Weight-only quantization speeds up memory-bound work only.** Single-request generation became 1.91× (1B) and 2.34× (3B) faster, about 82% of the speedup predicted from the byte ratio. Prefill and high-load throughput did not improve (0.93–1.02×), because they are limited by arithmetic, which W4A16 still does in BF16.
 - **This is exactly the distinction the mentor pointed out between W4A16 and W8A8.** W8A8 (SmoothQuant) and W4A4 (QuaRot, SpinQuant, DuQuant) also quantize activations so the INT8/INT4 tensor cores can be used. That is the only way to speed up the compute-bound workloads.
 - **The speed of a W4A16 model depends only on its format,** not on the method that chose the rounding (RTN, GPTQ and AWQ were within 1%). The choice of method is therefore purely about accuracy and quantization cost.
 - **For a fixed budget, quantize a bigger model:** a 4-bit 3B matches a BF16 1B in speed (209 vs 222 tok/s) and memory (2.15 vs 2.32 GiB), with much better perplexity (8.25 vs 9.76) and zero-shot accuracy (68.7 vs 60.4 with AWQ).
+- **W8A8 confirms the other half:** with INT8 activations, the compute-bound workloads get faster. Prefill is 1.32× (1B) and 1.40× (3B) faster than BF16, and throughput under load 1.17× and 1.21×. Single-request generation gains less than with W4A16 (1.30× / 1.46× vs 1.91× / 2.34×), because 8-bit weights are more bytes to read. **Each format speeds up its own bottleneck:** W4A16 for one user (memory), W8A8 for long prompts and many users (arithmetic).
+- **INT8 does not give the full 2× of its peak:** prefill reaches 54–65% of twice the BF16 matmul speed. The cause is not separated yet: INT8 matmul efficiency on this GPU, the activation-quantization kernels, or the parts that stay in BF16 (attention, `lm_head`).
+- **Per-token activation scales cost practically nothing at run time** (static scales were within ±1%, about the noise). Static scales would only make sense if they were faster. Here they are not, and they break the accuracy on Llama-3.2.
 
 ## 10c. What the zero-shot results teach (for the discussion section)
 
@@ -281,5 +293,6 @@ Measured on Llama-3.2-1B and 3B (results.md, group B). Both kinds are "outliers"
 - Perplexity and zero-shot disagree: GPTQ has the better perplexity, AWQ the better zero-shot accuracy (0.9 points on the 3B). Which should weigh more in our conclusions? Is it worth testing the "GPTQ fits the calibration data" idea with perplexity on C4, or adding a harder task such as MMLU?
 - SmoothQuant gives no gain with per-token activation scales on either model (1B, 3B; 3 seeds), and cannot save static scales on Llama-3.2, because of massive activations at `down_proj`'s input (confirmed on both sizes). Should group B keep SmoothQuant as the only W8A8 method, or also test a variant that handles `down_proj` (static scales everywhere except the 2–3 affected `down_proj` layers, or an `up_proj → down_proj` smoothing mapping)?
 - W8A8 RTN is already within about 0.5 zero-shot points of BF16 on both models, which is the size of the zero-shot noise. Is perplexity then the main accuracy metric for group B, with zero-shot as a sanity check?
+- W8A8 prefill is 1.32–1.40× faster than BF16, not 2×. Is it worth finding out why (a plain INT8 vs BF16 matmul test, or a profile of one prefill step), or is the end-to-end number enough for the report?
 - The zero-shot average varies by 0.3–0.5 points between calibration seeds. Are 3 seeds enough, and should groups B and C also use 3 seeds?
 - Group C will have no end-to-end speed numbers (no W4A4 kernels in vLLM for the A40). Is accuracy plus kernel-level speed (QuaRot's CUTLASS kernels) enough?

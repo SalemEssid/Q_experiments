@@ -36,6 +36,21 @@ All experiments run on the same machine and software stack, so results are direc
 | transformers / compressed-tensors | 5.19.0 / 0.17.0 |
 | Workaround 1 | `torchcodec` uninstalled. The PyPI build is for CUDA 13 and crashes `import vllm`. It is only used for audio/video input |
 | Workaround 2 | `VLLM_USE_FLASHINFER_SAMPLER=0`. FlashInfer would compile its sampling kernels with the system nvcc 12.0, which is too old, so vLLM's PyTorch sampler is used instead. Same setting for every model, so the comparison stays fair |
+| W4A16 kernel | `MarlinLinearKernel` (scheme `CompressedTensorsWNA16`) |
+| W8A8 kernel | `CutlassInt8ScaledMMLinearKernel` (scheme `CompressedTensorsW8A8Int8`, log line "Selected CutlassInt8ScaledMMLinearKernel"). Per layer: `scaled_int8_quant` (a separate kernel that rounds the BF16 activations to INT8 and computes the per-token scales), then the CUTLASS INT8 matmul, which applies both scales at the end and writes BF16 |
+| torch.compile fusion passes | `fuse_norm_quant` and `fuse_act_quant` are off (vLLM default here), so activation quantization is not merged into the preceding RMSNorm or SiLU kernel |
+
+### SpinQuant environment (group C: SpinQuant, QuaRot via SpinQuant, RTN W4A4)
+
+Created by `scripts/setup_spinquant_env.sh` in `~/venvs/spinquant`.
+
+| Component | Version / setting |
+|---|---|
+| SpinQuant code | facebookresearch/SpinQuant, commit `8f47aa3` (2025-02-14, main), in `third_party/SpinQuant` |
+| PyTorch | 2.6.0+cu124 (runs on driver 535 through CUDA minor-version compatibility, like the cu126 build in `quant`) |
+| transformers / accelerate / datasets | 4.44.2 / 0.34.2 / 2.20.0 (SpinQuant's `requirement.txt`), numpy < 2 |
+| fast-hadamard-transform | 1.1.0, prebuilt wheel `cu12torch2.6` from the GitHub release v1.1.0.post2. Not compiled, so the nvcc 12.0 / gcc 13.2 problem is avoided. The wheel has sm_80 code, which runs on the A40 (sm_86) |
+| Datasets cache | separate (`HF_DATASETS_CACHE=~/.cache/huggingface/datasets_spinquant`), so datasets 2.20 never reads caches written by the newer version in `quant` |
 
 ## Quantization settings shared by all methods
 

@@ -175,14 +175,14 @@ When one request generates tokens, every token requires reading all the weights 
 - **Why the 3B gains more:** mostly because its byte ratio is better (2.81× vs 2.34×, since the BF16 embedding is a smaller share), not because of overheads. Both sizes reach the same share of their predicted speedup.
 - **Memory-bound confirmed:** BF16 generation runs at 80–83% of the GPU's memory bandwidth, so reading weights really is the bottleneck.
 - **A 4-bit 3B is about as fast and as small as a BF16 1B, and much more accurate:** 209 vs 222 tok/s, 2.15 vs 2.32 GiB of weights, perplexity 8.25 vs 9.76. For a fixed speed or memory budget, a larger quantized model beats a smaller full-precision one. This is a key practical argument for quantization.
-- **No gain when compute is the bottleneck:** prefill is 4–7% *slower* with W4A16 (0.93–0.96×), and throughput under heavy load is unchanged (0.98–1.02×). In both cases the GPU is busy with arithmetic: prefill runs at an estimated 80–90% of the measured BF16 matmul speed (estimate: 2 × non-embedding parameters FLOPs per token, plus attention). W4A16 still does BF16 math, plus the unpacking. **To speed up these workloads, activations must be quantized too (W8A8, W4A4), so that the INT8/INT4 tensor cores can be used.** This motivates groups B and C.
+- **No gain when compute is the bottleneck:** prefill is 4–7% *slower* with W4A16 (0.93–0.96×), and throughput under heavy load is unchanged (0.98–1.02×). In both cases the GPU is busy with arithmetic: prefill runs at an estimated 80–90% of the measured BF16 matmul speed (estimate: 2 × non-embedding parameters FLOPs per token, plus attention). W4A16 still does BF16 math, plus the unpacking. **To speed up these workloads, activations must be quantized too (W8A8, W4A4), so that the INT8/INT4 tensor cores can be used.** This motivates groups B and C. (Confirmed in group B: W8A8 prefill is 1.32–1.40× faster than BF16.)
 - **Short prompts still benefit a little:** TTFT for a 128-token prompt drops 8% (1B) and 20% (3B). At this size the prompt is too short to keep the GPU busy with arithmetic, so weight reading still matters.
 - **More room for the KV cache:** +5% tokens on the 1B and +27% on the 3B. On the 3B, BF16 can hold about 147 full requests (512 + 256 tokens) at once, W4A16 about 187. Throughput still only rises 2%, because at that batch size each step is compute-bound: running more requests at once makes each step longer. The extra KV room would matter more with longer contexts or a smaller GPU.
 - **RTN, GPTQ and AWQ run at the same speed** (within 1%): same format, same kernel. Choose between them on accuracy and quantization cost only.
 - **vLLM and Hugging Face agree:** the GPTQ checkpoint generated word-for-word the same greedy text in vLLM (Marlin kernel) as in Hugging Face, so the speed and accuracy numbers describe the same model.
 - **Measurement quality:** the GPU probe read 101–107 TFLOPS around every run (an idle GPU gives about 110; sharing with the other VM would give roughly half), so there was no interference. The value after each run is consistently about 3% lower, probably because the GPU is warmer after sustained load. RTN, GPTQ and AWQ, which should be identical, agree within 0.5% on TPOT, so the noise is small.
 
-## Group B: W8A8 INT8 (accuracy done; speed in progress)
+## Group B: W8A8 INT8
 
 `W8A8` = INT8 symmetric weights (one scale per output channel) and INT8 symmetric activations (one scale per token, computed at run time). `lm_head` stays BF16. Plan and settings: experiment_plan.md and methods_notes.md, section 6.
 
@@ -249,6 +249,68 @@ SmoothQuant α=0.5 per seed: 1B 60.52 / 60.41 / 60.50, 3B 68.65 / 68.41 / 68.45.
 - **The 3B is more robust again:** +0.9% PPL vs +1.4% on the 1B.
 - **Quantization cost:** SmoothQuant takes 28 s (1B) and 65 s (3B), with 2.1–2.5 GiB of GPU memory: one calibration pass to collect channel ranges. That is cheaper than GPTQ (72 / 167 s) and AWQ (215 / 572 s) at W4A16. RTN takes 2 s.
 - **Compared with W4A16 (accuracy only; the two formats save different things):** on the 1B, even RTN W8A8 (+0.13 PPL, −0.49 points) beats every W4A16 method (best: +0.94 PPL, −1.45 points). On the 3B, perplexity separates them clearly (+0.07 vs +0.44), but on zero-shot AWQ W4A16 (−0.21) and W8A8 (−0.11 to −0.51) are all within noise of BF16. Zero-shot cannot separate losses this small; perplexity can.
+
+### Speed and memory (vLLM)
+
+Same vLLM version, settings and workloads as group A (`scripts/run_speed_groupB.sh`, seed-0 checkpoints). BF16 and one W4A16 model (AWQ; RTN and GPTQ run at the same speed) are repeated from group A for comparison. Speedups in brackets are relative to BF16 of the same size.
+
+| Model | Method | Format | Weights in GPU (GiB) | KV cache (k tokens) | TTFT, 128 tokens (ms) | TPOT, 1 request (ms) | Decode tok/s, 1 request | Prefill tok/s (32 × 1024) | Throughput out tok/s (256 req.) | GPU TFLOPS before / after |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Llama-3.2-1B | BF16 | W16A16 | 2.32 | 540 | 7.97 | 4.500 | 222.2 | 43,445 | 8,755 | 106.7 / 101.9 |
+| Llama-3.2-1B | AWQ | W4A16 | 0.99 | 568 | 7.35 | 2.351 | 425.3 (1.91×) | 41,456 (0.95×) | 8,633 (0.99×) | 106.4 / 101.4 |
+| Llama-3.2-1B | RTN | W8A8 | 1.41 | 557 | 7.42 | 3.449 | 290.0 (1.31×) | 57,386 (1.32×) | 10,242 (1.17×) | 106.9 / 107.2 |
+| Llama-3.2-1B | SmoothQuant | W8A8 | 1.41 | 556 | 7.39 | 3.451 | 289.7 (1.30×) | 56,981 (1.31×) | 10,215 (1.17×) | 108.0 / 106.2 |
+| Llama-3.2-1B | RTN | W8A8_STATIC | 1.41 | 556 | 7.48 | 3.484 | 287.0 (1.29×) | 57,939 (1.33×) | 10,259 (1.17×) | 107.9 / 105.3 |
+| Llama-3.2-3B | BF16 | W16A16 | 6.04 | 113 | 16.49 | 11.188 | 89.4 | 16,703 | 2,535 | 106.5 / 102.5 |
+| Llama-3.2-3B | AWQ | W4A16 | 2.15 | 144 | 13.16 | 4.784 | 209.0 (2.34×) | 15,529 (0.93×) | 2,592 (1.02×) | 106.6 / 103.0 |
+| Llama-3.2-3B | RTN | W8A8 | 3.45 | 132 | 13.85 | 7.674 | 130.3 (1.46×) | 23,428 (1.40×) | 3,064 (1.21×) | 103.9 / 104.9 |
+| Llama-3.2-3B | SmoothQuant | W8A8 | 3.45 | 132 | 13.90 | 7.677 | 130.3 (1.46×) | 23,219 (1.39×) | 3,059 (1.21×) | 106.7 / 104.5 |
+| Llama-3.2-3B | RTN | W8A8_STATIC | 3.45 | 132 | 14.22 | 7.712 | 129.7 (1.45×) | 23,700 (1.42×) | 3,068 (1.21×) | 106.9 / 104.5 |
+
+**Which format speeds up what** (speedup vs BF16, 1B / 3B; W4A16 = RTN, GPTQ and AWQ, W8A8 = RTN and SmoothQuant):
+
+| Workload | Limited by | W4A16 | W8A8 |
+|---|---|---|---|
+| Generation, 1 request (TPOT) | reading the weights (memory) | **1.91× / 2.34×** | 1.30× / 1.46× |
+| Prompt of 128 tokens (TTFT) | mostly memory | **1.08× / 1.25×** | 1.07× / 1.19× |
+| Prefill, 32 × 1024 tokens | arithmetic | 0.95–0.96× / 0.93× | **1.32× / 1.40×** |
+| Throughput, 256 requests | arithmetic (large batches) | 0.98–0.99× / 1.02× | **1.17× / 1.21×** |
+| KV cache room | free memory | **+5% / +27%** | +3% / +17% |
+
+Single-request generation vs the memory-bandwidth limit (same method as group A; W8A8 = mean TPOT of RTN and SmoothQuant):
+
+| Model | Format | Weights read per token | Measured TPOT | Effective bandwidth | Share of 696 GB/s | Speedup: predicted (byte ratio) → measured |
+|---|---|---|---|---|---|---|
+| Llama-3.2-1B | BF16 | 2.49 GB | 4.50 ms | 554 GB/s | 80% | |
+| Llama-3.2-1B | W4A16 | 1.06 GB | 2.36 ms | 451 GB/s | 65% | 2.34× → 1.91× (82% of predicted) |
+| Llama-3.2-1B | W8A8 | 1.51 GB | 3.45 ms | 439 GB/s | 63% | 1.65× → 1.30× (79% of predicted) |
+| Llama-3.2-3B | BF16 | 6.49 GB | 11.19 ms | 580 GB/s | 83% | |
+| Llama-3.2-3B | W4A16 | 2.31 GB | 4.78 ms | 483 GB/s | 69% | 2.81× → 2.34× (83% of predicted) |
+| Llama-3.2-3B | W8A8 | 3.70 GB | 7.68 ms | 483 GB/s | 69% | 1.75× → 1.46× (83% of predicted) |
+
+### Findings (speed and memory)
+
+- **INT8 math works on the A40:** W8A8 is the first format that speeds up compute-bound work. Prefill is 1.32× (1B) and 1.40× (3B) faster than BF16, and throughput under load 1.17× and 1.21×. W4A16 gave 0.93–1.02× on the same workloads. With both weights and activations in INT8, the matrix multiplies run on the INT8 tensor cores.
+- **Each format wins where its bottleneck is:**
+  - W4A16 wins single-request generation (1.91× / 2.34× vs 1.30× / 1.46×), because 4-bit weights are fewer bytes to read.
+  - W8A8 wins prefill and serving many requests, because it makes the arithmetic cheaper.
+  - So which format is best depends on the workload. This is the mentor's point that W4A16 and W8A8 are not directly comparable.
+- **Single-request generation follows the byte ratio again:** 79% (1B) and 83% (3B) of the predicted speedup. W4A16 reached 82–83%. The fixed costs are the same (attention, norms, the BF16 `lm_head`, kernel launches).
+- **Prefill is faster, but not 2× faster:**
+  - On paper, the A40's INT8 tensor cores have twice the BF16 peak (spec sheet; check before quoting).
+  - Counted in FLOPs (2 × non-embedding parameters per token, plus attention), W8A8 prefill runs at the equivalent of about 115 TFLOPS (1B) and 136 (3B). BF16 runs at 87 and 97. That is 54–65% of twice the measured BF16 matmul speed.
+  - Possible reasons, not separated yet: INT8 matmuls may not reach 2× of BF16 on this vGPU for these matrix shapes; the extra kernels that quantize the activations cost time; and attention stays in BF16. A plain INT8-vs-BF16 matmul test would separate the first reason from the others.
+- **Throughput gains less than prefill** (1.17–1.21× vs 1.32–1.40×). Likely reason (not measured): the throughput run is mostly generation steps, and two parts of those steps are not sped up. Attention reads the KV cache in BF16. The BF16 `lm_head` runs for every new token, and it is 21% of the matmul work per token on the 1B and 12% on the 3B.
+- **Static scales are not faster than per-token scales:**
+  - Static vs per-token RTN: prefill +1.0% / +1.2%, throughput +0.2% / +0.1%, single-request generation −1.0% / −0.5%.
+  - That is about the noise level. RTN and SmoothQuant, which have the same format, differ by up to 0.9% in prefill.
+  - Why it costs so little: both versions must read every activation and write it out as INT8. A per-token scale only adds a maximum over values that are already loaded.
+  - So on this setup, per-token scales are practically free, and static scales give no speed reason to accept their accuracy failure.
+  - The broken accuracy of the static models does not affect this measurement: speed does not depend on the values (same shapes, same kernels, fixed output length).
+- **RTN and SmoothQuant run at the same speed** (within 1%). Smoothing is folded into the norms and the weights before quantization, so nothing extra runs at inference.
+- **Memory:** 1.41 / 3.45 GiB of weights on the GPU (BF16 2.32 / 6.04, W4A16 0.99 / 2.15). The KV cache gets +3% / +17% more room: the 3B fits about 171 full requests (512 + 256 tokens) at once, against 147 for BF16 and 187 for W4A16.
+- **Short prompts:** TTFT for 128 tokens drops 7% (1B) and 16% (3B), a little less than with W4A16 (8% / 20%). A prompt this short is still partly limited by reading the weights.
+- **Measurement quality:** the GPU probe read 103.9–108.0 TFLOPS around every run, so the GPU was not shared during the measurements.
 
 ### Which layers cause the activation loss (`W8A8`, per-token scales)
 
@@ -349,3 +411,4 @@ Activation measurements (`scripts/act_stats.py`, BF16 Llama-3.2-1B, WikiText-2 t
 - 2026-11-10: `run_groupB.sh` finished. 1B SQ α=0.5 seeds 1 and 2: PPL 9.899 / 9.905 (27.9 / 28.0 s); weights-only 9.780 / 9.780. 3B RTN W8A8: PPL 7.889 (2.4 s, 0.05 GiB GPU), weights-only 7.823. 3B SQ α=0.5 seeds 0 / 1 / 2: 7.891 / 7.889 / 7.891 (65 s, 2.46 GiB GPU), weights-only 7.825 / 7.824 / 7.822. 3B SQ α=0.8: 7.881, weights-only 7.825. All 3B W8A8 checkpoints 3.361 GiB.
 - 2026-11-10: 3B RTN W8A8_STATIC: PPL 60.612 (66.0 s, 2.46 GiB GPU). With BF16 down_proj inputs: 7.948. `act_stats.py` on BF16 3B: down_proj input max 732 in block 1 (position 0, ratio 1420) and 536 in block 27 (position 0, ratio 60); other blocks ratio 4–8.
 - 2026-11-10: zero-shot of all W8A8 models (batch 16). 1B: RTN 59.95, SQ α=0.5 60.52 / 60.41 / 60.50, α=0.8 60.24. 3B: RTN 68.38, SQ α=0.5 68.65 / 68.41 / 68.45, α=0.8 68.78.
+- 2026-11-10: vLLM speed for W8A8 (`run_speed_groupB.sh`; RTN, SQ α=0.5 seed 0, RTN static). 1B RTN: TPOT 3.449 ms (1.31×), prefill 57,386 tok/s (1.32×), throughput 10,242 out tok/s (1.17×), 1.41 GiB weights, 557k KV tokens. 3B RTN: 7.674 ms (1.46×), 23,428 (1.40×), 3,064 (1.21×), 3.45 GiB, 132k. SQ and static within 1% of RTN. GPU probe 103.9–108.0 TFLOPS.
