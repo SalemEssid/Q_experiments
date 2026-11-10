@@ -45,10 +45,10 @@ Goal: the most aggressive format. Activation outliers must be removed first (rot
 | Method | Implementation | Status |
 |---|---|---|
 | BF16 in each codebase | must reproduce 9.756 / 7.817 | SpinQuant code: done (9.761 / 7.817) |
-| RTN W4A4 (reference) | SpinQuant codebase, no rotation | next: `run_groupC_rtn.sh` |
+| RTN W4A4 (reference) | SpinQuant codebase, no rotation | running: `run_groupC_rtn.sh`. GPTQ without rotation: `run_groupC_gptq.sh` |
 | QuaRot (official) | Official spcl/QuaRot, ported to Llama-3.2 (its transformers 4.38 pin and model whitelist exclude it) | planned |
-| QuaRot (via SpinQuant code) | SpinQuant codebase with random Hadamard rotations and no training: the same algorithm in a different codebase | RTN weights, 3 rotation seeds: next (`run_groupC_rtn.sh`). GPTQ weights: after the C4 calibration patch |
-| SpinQuant | Official facebookresearch/SpinQuant (transformers 4.44.2, has Llama-3.2 support) | planned |
+| QuaRot (via SpinQuant code) | SpinQuant codebase with random Hadamard rotations and no training: the same algorithm in a different codebase | RTN weights, 3 rotation seeds: running (`run_groupC_rtn.sh`). GPTQ weights on our C4 windows, 3 rotation seeds: `run_groupC_gptq.sh` (task 1) |
+| SpinQuant | Official facebookresearch/SpinQuant (transformers 4.44.2, has Llama-3.2 support) | rotation training on our 800 C4 windows (1 GPU, 8 accumulation steps), then GPTQ: `run_spinquant_train.sh` (task 2) |
 | DuQuant | Official Hsu1023/DuQuant, ported to a newer transformers version (its pinned 4.35.2 cannot load Llama-3.2) | planned |
 
 **QuaRot comparison (two implementations):** same model, same calibration samples, settings aligned flag by flag. We compare perplexity, zero-shot accuracy, quantization time, the spread over several rotation seeds, and the porting effort. If results differ, we trace the difference to a specific setting or code path.
