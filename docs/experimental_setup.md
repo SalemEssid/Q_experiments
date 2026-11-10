@@ -47,9 +47,9 @@ Created by `scripts/setup_spinquant_env.sh` in `~/venvs/spinquant`.
 | Component | Version / setting |
 |---|---|
 | SpinQuant code | facebookresearch/SpinQuant, commit `8f47aa3` (2025-02-14, main), in `third_party/SpinQuant` |
-| PyTorch | 2.6.0+cu124 (runs on driver 535 through CUDA minor-version compatibility, like the cu126 build in `quant`) |
+| PyTorch | 2.7.1+cu126 (runs on driver 535 through CUDA minor-version compatibility, like the cu126 build in `quant`). First tried 2.6.0+cu124: its pip wheels use the old C++ ABI, and fast-hadamard-transform failed to load ("undefined symbol … `__cxx11` …"), because every 1.1.0 wheel, even the one labelled `cxx11abiFALSE`, is built with the new ABI (checked in the compiled `.so`). PyTorch 2.7 wheels use the new ABI |
 | transformers / accelerate / datasets | 4.44.2 / 0.34.2 / 2.20.0 (SpinQuant's `requirement.txt`), numpy < 2, pyarrow < 26 (pyarrow 26 refuses numpy 1.x: "pyarrow requires NumPy 2.0 or newer") |
-| fast-hadamard-transform | 1.1.0, prebuilt wheel `cu12torch2.6` from the GitHub release v1.1.0.post2. Not compiled, so the nvcc 12.0 / gcc 13.2 problem is avoided. The wheel has sm_80 code, which runs on the A40 (sm_86) |
+| fast-hadamard-transform | 1.1.0, prebuilt wheel `cu12torch2.7cxx11abiTRUE` from the GitHub release v1.1.0.post2, installed with `--no-deps`. Not compiled, so the nvcc 12.0 / gcc 13.2 problem is avoided. The wheel has sm_80 code, which runs on the A40 (sm_86) |
 | Datasets cache | separate (`HF_DATASETS_CACHE=~/.cache/huggingface/datasets_spinquant`), so datasets 2.20 never reads caches written by the newer version in `quant` |
 
 ## Quantization settings shared by all methods

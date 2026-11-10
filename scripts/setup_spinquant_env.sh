@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Group C, step 1: the SpinQuant environment. Also used for "QuaRot via SpinQuant" and the RTN W4A4 reference.
-#   ~/venvs/spinquant   PyTorch 2.6.0 (CUDA 12.4 build; runs on driver 535 like the CUDA 12.6 build in ~/venvs/quant)
+#   ~/venvs/spinquant   PyTorch 2.7.1 (CUDA 12.6 build, as in ~/venvs/quant, which runs on driver 535).
+#                       Not 2.6: its pip wheels use the old C++ ABI, but every fast-hadamard-transform 1.1.0 wheel,
+#                       including the one labelled "cxx11abiFALSE", is built with the new ABI (checked in the .so files).
 #                       + SpinQuant's pinned versions (transformers 4.44.2, accelerate 0.34.2, datasets 2.20.0)
 #                       + fast-hadamard-transform from its prebuilt wheel: nothing is compiled, so the
 #                         nvcc 12.0 / gcc 13.2 problem does not apply.
@@ -22,7 +24,7 @@ grep -q HF_DATASETS_CACHE "$VENV/bin/activate" || \
   echo 'export HF_DATASETS_CACHE=$HOME/.cache/huggingface/datasets_spinquant' >> "$VENV/bin/activate"
 source "$VENV/bin/activate"
 pip install --upgrade pip
-pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu126
 
 [ -d third_party/SpinQuant ] || git clone https://github.com/facebookresearch/SpinQuant.git third_party/SpinQuant
 git -C third_party/SpinQuant checkout "$SPINQUANT_COMMIT"
@@ -38,7 +40,8 @@ ver = ".".join(torch.__version__.split(".")[:2])
 print(f"fast_hadamard_transform-1.1.0+cu{cuda}torch{ver}cxx11abi{abi}-cp311-cp311-linux_x86_64.whl")')
 echo "wheel: $WHEEL"
 [ -f "third_party/wheels/$WHEEL" ] || curl -fL -o "third_party/wheels/$WHEEL" "$FHT_RELEASE/${WHEEL//+/%2B}"
-pip install "third_party/wheels/$WHEEL"
+# --no-deps: never let this wheel pull in another PyTorch; --force-reinstall: replace a wheel installed earlier.
+pip install --force-reinstall --no-deps "third_party/wheels/$WHEEL"
 
 echo "=== check"
 echo "SpinQuant commit: $(git -C third_party/SpinQuant rev-parse HEAD)"
