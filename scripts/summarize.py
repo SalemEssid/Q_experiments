@@ -2,6 +2,7 @@
 
 Table 1: one row per run. Table 2: mean ± std over calibration seeds (only when a configuration has several seeds).
 Table 2b: W8A8 error split into weights and activations (only when results/ppl_weights_only exists).
+Table 2c: which layers cause the W8A8 activation error (only when results/ppl_act_diag exists).
 Table 3: vLLM speed and memory (only when results/speed exists).
 Tables 4-5: zero-shot accuracy per run, and its average over calibration seeds (only when results/zeroshot exists).
 Rows are grouped by model, then by format (BF16, W4A16, W8A8, ...), then by method.
@@ -130,6 +131,35 @@ if weights_only:
         print(
             f"| {base} | {label(name)} | {scheme} | {bf16:.3f} | {w_only:.3f} | {full:.3f} "
             f"| {w_only - bf16:+.3f} | {full - w_only:+.3f} |"
+        )
+
+act_diag = load("results/ppl_act_diag")  # files named <run>-actoff-<layer groups>.json
+if act_diag:
+    print(
+        "\nWhere the W8A8 activation loss comes from: one group of layers keeps BF16 inputs, "
+        "all others stay W8A8 (share = part of the activation loss that disappears)"
+    )
+    print("| Model | Method | Scheme | W8A8 PPL | Activation loss | BF16 inputs in | PPL | Share of activation loss |")
+    print("|---|---|---|---|---|---|---|---|")
+    layer_order = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]  # order in a block
+
+    def diag_key(n):
+        run, groups = n.split("-actoff-")
+        first = groups.split("+")[0]
+        return sort_key(run), layer_order.index(first) if first in layer_order else 99, groups
+
+    for diag_name in sorted(act_diag, key=diag_key):
+        name, groups = diag_name.split("-actoff-")
+        base, _, scheme, _, _ = parse_name(name)
+        full, w_only = ppl.get(name, {}).get("ppl"), weights_only.get(name, {}).get("ppl")
+        value = act_diag[diag_name]["ppl"]
+        if full is None:
+            continue
+        act_loss = full - w_only if w_only is not None else None
+        share = f"{(full - value) / act_loss:.0%}" if act_loss and act_loss > 0 else "–"
+        print(
+            f"| {base} | {label(name)} | {scheme} | {full:.3f} | {f'{act_loss:+.3f}' if act_loss is not None else '–'} "
+            f"| {groups.replace('+', ', ')} | {value:.3f} | {share} |"
         )
 
 

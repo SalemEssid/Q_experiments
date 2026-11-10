@@ -163,6 +163,11 @@ Y = (X · diag(s)⁻¹) · (diag(s) · W), with s_j = max|X_j|^α / max|W_j|^(1�
 
 **How accuracy is measured for W8A8:** when Hugging Face loads the checkpoint, compressed-tensors replaces each quantized Linear layer's forward function with one that rounds the input activations to INT8 before the multiply (fake quantization; `set_forward_quantized` in compressed-tensors 0.20.1). `ppl_eval.py` proves this on every run: it scores the first window with activation quantization on and off, and the two losses must differ. "Off" keeps the 8-bit weights, so it also separates the weight error from the activation error.
 
+**Observations:**
+- Llama-3.2-1B, `W8A8` (per-token activation scales), seed 0: α=0.5 PPL 9.904, α=0.8 9.890, vs RTN 9.888 and BF16 9.756. **No gain over plain rounding.** Quantization takes 28 s and 2.1 GiB of GPU (one calibration pass to collect the activation maxima).
+- The error split shows why it cannot gain much: RTN's loss is mostly activations (+0.109 of +0.132), but smoothing leaves that part unchanged (+0.108 at α=0.8) while adding a little weight loss (+0.026 vs +0.023).
+- Hypothesis: the activation loss sits in the inputs SmoothQuant does not smooth (`o_proj`, `down_proj`). A per-token scale already handles a token whose values are all large; what remains are outliers that the standard Llama mappings do not reach.
+
 ---
 
 ## 7. QuaRot (planned, two implementations)

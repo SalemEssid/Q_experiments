@@ -190,11 +190,28 @@ When one request generates tokens, every token requires reading all the weights 
 |---|---|---|---|---|---|---|
 | Llama-3.2-1B | BF16 | – | 9.756 | – | 2.30 GiB | – |
 | Llama-3.2-1B | RTN | W8A8 | 9.888 | +0.132 (+1.4%) | 1.40 GiB | 1.6 s, 0.03 GiB GPU |
+| Llama-3.2-1B | SmoothQuant α=0.5 | W8A8 | 9.904 | +0.148 (+1.5%) | 1.40 GiB | 28.1 s, 2.12 GiB GPU |
+| Llama-3.2-1B | SmoothQuant α=0.8 | W8A8 | 9.890 | +0.134 (+1.4%) | 1.40 GiB | 28.0 s, 2.12 GiB GPU |
+
+Seed 0 only so far. Peak CPU RAM: 3.5 GiB (RTN), 8.4–8.5 GiB (SmoothQuant, which holds the calibration activations).
 
 **Activation quantization is really applied in evaluation:** `ppl_eval.py` found 112 layers with INT8 input activations (16 blocks × 7 Linear layers; `lm_head` excluded). The first-window loss is 1.99390 with activation quantization and 1.98569 without it.
 
+### Error split: weights vs activations
+
+"Weights only" = the same checkpoint evaluated with activation quantization switched off (`ppl_eval.py --weights-only`), i.e. W8A16.
+
+| Model | Method | BF16 PPL | Weights only PPL | W8A8 PPL | Loss from weights | Extra loss from activations |
+|---|---|---|---|---|---|---|
+| Llama-3.2-1B | RTN | 9.756 | 9.779 | 9.888 | +0.023 | +0.109 |
+| Llama-3.2-1B | SmoothQuant α=0.5 | 9.756 | 9.778 | 9.904 | +0.022 | +0.126 |
+| Llama-3.2-1B | SmoothQuant α=0.8 | 9.756 | 9.782 | 9.890 | +0.026 | +0.108 |
+
 ### First observations
-- **8-bit RTN is already close to BF16 on the 1B:** +0.13 PPL, 15× less than RTN at W4A16 (+1.95) and less than the best W4A16 method (GPTQ, +0.94 on average). This leaves SmoothQuant at most 0.13 PPL to win back with per-token activation scales. The static per-tensor format is the harder test.
+- **8-bit RTN is already close to BF16 on the 1B:** +0.13 PPL, 15× less than RTN at W4A16 (+1.95) and less than the best W4A16 method (GPTQ, +0.94 on average).
+- **83% of the W8A8 loss comes from the activations** (+0.109 of +0.132). 8-bit weights alone cost only +0.023.
+- **SmoothQuant does not help with per-token activation scales:** α=0.5 is slightly worse than RTN (+0.148 vs +0.132), α=0.8 equal (+0.134). With α=0.8 the weight loss grows a little (+0.026 vs +0.023), so difficulty did move to the weights, as intended, but the activation loss did not shrink (+0.108 vs +0.109). Differences of 0.01–0.02 PPL may be within calibration-seed noise (not measured yet). Either way, there is no gain.
+- **Likely reason (being tested):** on Llama, SmoothQuant smooths only the inputs of q/k/v and gate/up. If most of the activation loss comes from the inputs of `o_proj` or `down_proj`, which it cannot smooth, smoothing the others cannot help. Test: `scripts/run_act_diag.sh` leaves one group of layers in BF16 at a time.
 - **Size:** 1.40 GiB (1.65× smaller than BF16): INT8 weights plus the 0.49 GiB BF16 embedding. W4A16 is 0.96 GiB.
 - Hugging Face evaluation takes 18 s instead of 11 s, because the activation rounding is simulated in software. This says nothing about real speed (measured later in vLLM).
 
@@ -216,3 +233,4 @@ When one request generates tokens, every token requires reading all the weights 
 - 2026-11-10: zero-shot for all 16 group-A models at batch size 16 (`scripts/run_zeroshot.sh`). Averages: 1B BF16 60.44, RTN 55.12, GPTQ 58.69 / 58.42 / 59.16, AWQ 59.31 / 58.48 / 59.18 (seeds 0 / 1 / 2); 3B BF16 68.89, RTN 67.44, GPTQ 68.11 / 67.62 / 67.53, AWQ 69.06 / 68.44 / 68.54. The 1B BF16 at batch 32 scored 60.28 (+0.16 at batch 16).
 - 2026-11-10: batch 32 vs 16 for all eight 1B models: differences −0.26 to +0.16 points, mean −0.06, no systematic direction.
 - 2026-11-10: group B started. Llama-3.2-1B RTN W8A8: PPL 9.8883 (+0.132). Quantization 1.6 s, peak GPU 0.03 GiB, peak RAM 3.48 GiB, 1.396 GiB on disk. Sample generation coherent. Activation check: 112 layers; first-window loss 1.99390 (activations quantized) vs 1.98569 (not quantized).
+- 2026-11-10: Llama-3.2-1B SmoothQuant W8A8 (seed 0): α=0.5 PPL 9.9044 (28.1 s, 2.12 GiB GPU, 8.43 GiB RAM); α=0.8 PPL 9.8903 (28.0 s, 2.12 GiB GPU, 8.53 GiB RAM). Samples coherent. Weights-only PPL: RTN 9.7793, SQ α=0.5 9.7784, SQ α=0.8 9.7822.
