@@ -64,6 +64,7 @@ recovered = (PPL_RTN − PPL_method) / (PPL_RTN − PPL_BF16).
 **Observations:**
 - Llama-3.2-1B: PPL 9.756 → 11.709 (+20%). Takes 1.9 s and almost no GPU memory. The sample generation is still fluent: a 20% perplexity increase does not make the model unusable, but it does measurably hurt accuracy.
 - Llama-3.2-3B: PPL 7.817 → 8.490 (+8.6%), less than half the 1B's relative loss. Larger models tolerate rounding better.
+- **W8A8 (group B):** 1B PPL 9.756 → 9.888 (+1.4%) in 1.6 s, with no calibration data. 8 bits give 256 levels instead of 16, so plain rounding is already good when the activation scale is set per token.
 - Zero-shot: 1B 60.44 → 55.12 (−5.3 points), the largest loss in group A. About half of it is BoolQ, which falls to 48.3%: below a coin flip and below answering "yes" to everything (62.2%). 3B: 68.89 → 67.44 (−1.45 points).
 
 ---

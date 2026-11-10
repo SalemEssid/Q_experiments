@@ -1,6 +1,7 @@
 """Collect every result JSON into Markdown tables, ready to paste into the report.
 
 Table 1: one row per run. Table 2: mean ± std over calibration seeds (only when a configuration has several seeds).
+Table 2b: W8A8 error split into weights and activations (only when results/ppl_weights_only exists).
 Table 3: vLLM speed and memory (only when results/speed exists).
 Tables 4-5: zero-shot accuracy per run, and its average over calibration seeds (only when results/zeroshot exists).
 Rows are grouped by model, then by format (BF16, W4A16, W8A8, ...), then by method.
@@ -110,6 +111,25 @@ if multi_seed:
         print(
             f"| {base} | {label(first, with_seed=False)} | {scheme} | {len(values)} "
             f"| {mean:.3f} ± {statistics.stdev(values):.3f} | {min(values):.3f} | {max(values):.3f} | {rec} |"
+        )
+
+
+weights_only = load("results/ppl_weights_only")
+if weights_only:
+    print("\nW8A8 error split: perplexity with only the weights quantized (activations left in BF16) vs both")
+    print(
+        "| Model | Method | Scheme | BF16 PPL | Weights only PPL | W8A8 PPL | Loss from weights "
+        "| Extra loss from activations |"
+    )
+    print("|---|---|---|---|---|---|---|---|")
+    for name in sorted(weights_only, key=sort_key):
+        base, _, scheme, _, _ = parse_name(name)
+        bf16, w_only, full = ppl.get(base, {}).get("ppl"), weights_only[name]["ppl"], ppl.get(name, {}).get("ppl")
+        if bf16 is None or full is None:
+            continue
+        print(
+            f"| {base} | {label(name)} | {scheme} | {bf16:.3f} | {w_only:.3f} | {full:.3f} "
+            f"| {w_only - bf16:+.3f} | {full - w_only:+.3f} |"
         )
 
 

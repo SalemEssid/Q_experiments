@@ -23,8 +23,15 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 parser = argparse.ArgumentParser()
 parser.add_argument("--model", required=True, help="Hugging Face model ID or local folder")
 parser.add_argument("--seqlen", type=int, default=2048, help="window length in tokens")
-parser.add_argument("--out-dir", default="results/ppl")
+parser.add_argument(
+    "--weights-only",
+    action="store_true",
+    help="W8A8 models only: turn activation quantization off for the whole evaluation, so only the error "
+    "of the 8-bit weights is measured. Saved to results/ppl_weights_only/",
+)
+parser.add_argument("--out-dir", default=None, help="default: results/ppl (results/ppl_weights_only with --weights-only)")
 args = parser.parse_args()
+out_dir = args.out_dir or ("results/ppl_weights_only" if args.weights_only else "results/ppl")
 
 tokenizer = AutoTokenizer.from_pretrained(args.model)
 model = AutoModelForCausalLM.from_pretrained(args.model, dtype=torch.bfloat16, device_map="cuda")
@@ -57,6 +64,13 @@ if act_layers:
     print(f"Activation quantization in {len(act_layers)} layers. First-window loss: "
           f"{loss_on:.5f} with it, {loss_off:.5f} without it (must differ)")
 
+if args.weights_only:
+    if not act_layers:
+        raise SystemExit("--weights-only needs a model with activation quantization (W8A8)")
+    for m in act_layers:
+        m.quantization_enabled = False
+    print("Activation quantization OFF for this evaluation: only the weight error is measured")
+
 nlls = []
 start = time.perf_counter()
 with torch.inference_mode():  # no gradients needed: we only evaluate
@@ -78,11 +92,12 @@ result = {
     "n_windows": n_windows,
     "ppl": round(ppl, 4),
     "activation_quant_check": act_check,  # None for BF16 and weight-only (W4A16) models
+    "weights_only": args.weights_only,
     "eval_seconds": round(elapsed, 1),
     "torch": torch.__version__,
     "transformers": transformers.__version__,
 }
-out = Path(args.out_dir) / f"{Path(args.model).name}.json"
+out = Path(out_dir) / f"{Path(args.model).name}.json"
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps(result, indent=2))
 print(json.dumps(result, indent=2))

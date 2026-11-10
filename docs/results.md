@@ -182,6 +182,22 @@ When one request generates tokens, every token requires reading all the weights 
 - **vLLM and Hugging Face agree:** the GPTQ checkpoint generated word-for-word the same greedy text in vLLM (Marlin kernel) as in Hugging Face, so the speed and accuracy numbers describe the same model.
 - **Measurement quality:** the GPU probe read 101–107 TFLOPS around every run (an idle GPU gives about 110; sharing with the other VM would give roughly half), so there was no interference. The value after each run is consistently about 3% lower, probably because the GPU is warmer after sustained load. RTN, GPTQ and AWQ, which should be identical, agree within 0.5% on TPOT, so the noise is small.
 
+## Group B: W8A8 INT8 (in progress)
+
+`W8A8` = INT8 symmetric weights (one scale per output channel) and INT8 symmetric activations (one scale per token, computed at run time). `lm_head` stays BF16. Plan and settings: experiment_plan.md and methods_notes.md, section 6.
+
+| Model | Method | Scheme | WikiText-2 PPL | Δ vs BF16 | Size on disk | Quantization cost |
+|---|---|---|---|---|---|---|
+| Llama-3.2-1B | BF16 | – | 9.756 | – | 2.30 GiB | – |
+| Llama-3.2-1B | RTN | W8A8 | 9.888 | +0.132 (+1.4%) | 1.40 GiB | 1.6 s, 0.03 GiB GPU |
+
+**Activation quantization is really applied in evaluation:** `ppl_eval.py` found 112 layers with INT8 input activations (16 blocks × 7 Linear layers; `lm_head` excluded). The first-window loss is 1.99390 with activation quantization and 1.98569 without it.
+
+### First observations
+- **8-bit RTN is already close to BF16 on the 1B:** +0.13 PPL, 15× less than RTN at W4A16 (+1.95) and less than the best W4A16 method (GPTQ, +0.94 on average). This leaves SmoothQuant at most 0.13 PPL to win back with per-token activation scales. The static per-tensor format is the harder test.
+- **Size:** 1.40 GiB (1.65× smaller than BF16): INT8 weights plus the 0.49 GiB BF16 embedding. W4A16 is 0.96 GiB.
+- Hugging Face evaluation takes 18 s instead of 11 s, because the activation rounding is simulated in software. This says nothing about real speed (measured later in vLLM).
+
 ## Log
 
 - 2026-11-09: Llama-3.2-1B BF16, PPL 9.7564 (141 windows, torch 2.14.1+cu126, transformers 5.22.2). Matches the published value of about 9.76.
@@ -199,3 +215,4 @@ When one request generates tokens, every token requires reading all the weights 
 - 2026-11-09: full zero-shot run stopped with CUDA out of memory at batch size 32 (an 8.9 GiB log-softmax over the 128k vocabulary for the longest questions). Batch size set to 16 for every model. Batch-32 results moved to `results/zeroshot_bs32/`, and everything re-run at 16.
 - 2026-11-10: zero-shot for all 16 group-A models at batch size 16 (`scripts/run_zeroshot.sh`). Averages: 1B BF16 60.44, RTN 55.12, GPTQ 58.69 / 58.42 / 59.16, AWQ 59.31 / 58.48 / 59.18 (seeds 0 / 1 / 2); 3B BF16 68.89, RTN 67.44, GPTQ 68.11 / 67.62 / 67.53, AWQ 69.06 / 68.44 / 68.54. The 1B BF16 at batch 32 scored 60.28 (+0.16 at batch 16).
 - 2026-11-10: batch 32 vs 16 for all eight 1B models: differences −0.26 to +0.16 points, mean −0.06, no systematic direction.
+- 2026-11-10: group B started. Llama-3.2-1B RTN W8A8: PPL 9.8883 (+0.132). Quantization 1.6 s, peak GPU 0.03 GiB, peak RAM 3.48 GiB, 1.396 GiB on disk. Sample generation coherent. Activation check: 112 layers; first-window loss 1.99390 (activations quantized) vs 1.98569 (not quantized).
