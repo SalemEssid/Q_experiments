@@ -28,6 +28,7 @@ pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu126
 
 [ -d third_party/SpinQuant ] || git clone https://github.com/facebookresearch/SpinQuant.git third_party/SpinQuant
 git -C third_party/SpinQuant checkout "$SPINQUANT_COMMIT"
+bash scripts/patch_spinquant.sh  # our changes to the official code (gloo instead of NCCL)
 # numpy < 2 to match the 2024 versions SpinQuant was written for; pyarrow 26 (pulled in by datasets) refuses numpy 1.x.
 pip install -r third_party/SpinQuant/requirement.txt "numpy<2" "pyarrow<26"
 

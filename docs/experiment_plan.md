@@ -77,6 +77,7 @@ These codebases simulate quantization (fake quant), so this group reports **accu
 - **Official QuaRot needs porting:** transformers 4.38 cannot read Llama-3.2's "llama3" RoPE scaling (added in 4.43), Llama-3.2 is not in its model whitelist, and Llama-3.2's tied embeddings must be untied before rotating (SpinQuant already does this). Its zero-shot code uses an old lm-eval API.
 - **DuQuant needs porting:** same transformers problem (pinned 4.35.2).
 - **SpinQuant rotation training** is configured for 8 GPUs. On one GPU we use gradient accumulation to keep the same effective batch. Memory needs for the 3B are unknown.
+- **No NCCL on the vGPU** (`cudaMemPoolCreate` not supported): SpinQuant runs with the gloo backend (our patch). Rotation training must therefore run without FSDP. If Hugging Face's Trainer or accelerate tries to start NCCL itself, that needs a fix too.
 
 ## Order
 
@@ -104,3 +105,4 @@ These codebases simulate quantization (fake quant), so this group reports **accu
 | 2026-11-10 | Group B main results use per-token (dynamic) activation scales. Static scales are reported as a diagnosis, without seeds or zero-shot | Static scales break Llama-3.2 (PPL ≈ 1300) with or without SmoothQuant, because of massive activations in `down_proj`'s input. Running seeds and tasks on a broken model would add nothing |
 | 2026-11-10 | SpinQuant environment: PyTorch 2.7.1+cu126 with SpinQuant's pinned transformers 4.44.2, and fast-hadamard-transform from a prebuilt wheel | No compiling, so the nvcc 12.0 / gcc 13.2 problem is avoided. 2.7 is the oldest PyTorch whose C++ ABI matches the prebuilt 1.1 wheels (2.6 failed: its wheels use the old ABI, and the wheel labelled for it is in fact built with the new one). Keep transformers at SpinQuant's pin, because its code contains its own copy of the 4.44 Llama model. If 2.7 clashes with transformers 4.44.2, the fallback is to compile fast-hadamard-transform for an older PyTorch with a home-folder CUDA toolkit |
 | 2026-11-10 | SpinQuant code pinned to commit `8f47aa3` | Reproducibility: the results must be traceable to the exact code |
+| 2026-11-10 | Changes to official code only through `scripts/patch_spinquant.sh`, each one justified in experimental_setup.md. First change: gloo instead of NCCL | NCCL cannot start on the vGPU. Keeping every change in one script makes the difference to the official code visible (`git diff`) and repeatable |

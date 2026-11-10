@@ -51,6 +51,9 @@ Created by `scripts/setup_spinquant_env.sh` in `~/venvs/spinquant`.
 | transformers / accelerate / datasets | 4.44.2 / 0.34.2 / 2.20.0 (SpinQuant's `requirement.txt`), numpy < 2, pyarrow < 26 (pyarrow 26 refuses numpy 1.x: "pyarrow requires NumPy 2.0 or newer") |
 | fast-hadamard-transform | 1.1.0, prebuilt wheel `cu12torch2.7cxx11abiTRUE` from the GitHub release v1.1.0.post2, installed with `--no-deps`. Not compiled, so the nvcc 12.0 / gcc 13.2 problem is avoided. The wheel has sm_80 code, which runs on the A40 (sm_86) |
 | Datasets cache | separate (`HF_DATASETS_CACHE=~/.cache/huggingface/datasets_spinquant`), so datasets 2.20 never reads caches written by the newer version in `quant` |
+| Changes to the official code | `scripts/patch_spinquant.sh` (`git -C third_party/SpinQuant diff` shows them). **1. gloo instead of NCCL** in `ptq.py` and `optimize_rotation.py`: NCCL cannot start on this vGPU (see below). With one process nothing is exchanged between GPUs (the code only reads the rank and waits at barriers), so this cannot change any result |
+
+**NCCL does not work on the A40-24Q vGPU.** NCCL 2.26.2 (shipped with PyTorch 2.7) calls `cudaMemPoolCreate` when it starts (`init.cc:416`), and the vGPU answers "operation not supported". `NCCL_CUMEM_ENABLE=0` does not help (`scripts/nccl_check.py`). Single-GPU code is unaffected, but anything that insists on NCCL (FSDP, multi-process training) must be changed to run in one process.
 
 ## Quantization settings shared by all methods
 

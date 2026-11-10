@@ -5,8 +5,8 @@
 # the same protocol as scripts/ppl_eval.py.
 # Run from ~/Q_experiments with the spinquant venv active:  bash scripts/run_spinquant_bf16.sh
 set -e -o pipefail
-# NCCL's cuMem memory allocation fails on the A40-24Q vGPU ("unhandled cuda error"); vLLM turns it off by default too.
-export NCCL_CUMEM_ENABLE=0
+# NCCL cannot start on this vGPU, so SpinQuant must use gloo (scripts/patch_spinquant.sh; this checks it was applied).
+grep -q 'init_process_group(backend="gloo"' third_party/SpinQuant/ptq.py || { echo "run scripts/patch_spinquant.sh first"; exit 1; }
 mkdir -p logs outputs/spinquant
 cd third_party/SpinQuant
 for size in 1B 3B; do

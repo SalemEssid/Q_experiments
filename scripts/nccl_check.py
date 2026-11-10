@@ -4,6 +4,8 @@ SpinQuant calls dist.init_process_group("nccl") and dist.barrier() even with one
 all_reduce, in a few seconds. Usage (spinquant venv, from ~/Q_experiments):
   torchrun --nproc_per_node=1 scripts/nccl_check.py                          # default settings
   NCCL_CUMEM_ENABLE=0 torchrun --nproc_per_node=1 scripts/nccl_check.py      # without NCCL's cuMem memory
+Result on the A40-24Q (2026-11-10): both fail. NCCL 2.26.2 calls cudaMemPoolCreate at start-up (init.cc:416), which
+the vGPU does not support ("operation not supported"). Hence scripts/patch_spinquant.sh switches SpinQuant to gloo.
 """
 import os
 
