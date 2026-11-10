@@ -52,7 +52,7 @@ All experiments run on the same machine and software stack, so results are direc
 - **Tasks:** ARC-Easy, ARC-Challenge, HellaSwag, PIQA, WinoGrande, BoolQ, the task set of the QuaRot, SpinQuant and DuQuant papers. 0-shot, lm-eval's default prompts.
 - **How it is scored:** for each question the model scores every answer option by its log-probability, and the most likely option is its answer. Nothing is generated.
 - **Metric:** `acc_norm` (accuracy with length-normalized probabilities) when the task has it (ARC-e, ARC-c, HellaSwag, PIQA), otherwise `acc` (WinoGrande, BoolQ). This is the rule used in QuaRot's evaluation code. The average is the plain mean over the six tasks.
-- **Batch size 16** for every model. Batch 32 ran out of memory on the 3B: lm-eval computes log-probabilities over the full 128k vocabulary for every token in a batch.
+- **Batch size 16** for every model. Batch 32 ran out of memory on the 3B: lm-eval computes log-probabilities over the full 128k vocabulary for every token in a batch. The batch size must be the same for every model because it shifts the scores slightly: the 1B BF16 average was 60.28 at batch 32 and 60.44 at batch 16, since padding changes the rounding of the BF16 matrix multiplies.
 - **Uncertainty:** lm-eval reports a standard error per task (about 0.5–1.5 points here, depending on the task size). Differences between methods smaller than that need care.
 
 ## Speed and memory protocol (`scripts/bench_vllm.py`)

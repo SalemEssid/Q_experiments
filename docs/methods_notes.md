@@ -64,6 +64,7 @@ recovered = (PPL_RTN − PPL_method) / (PPL_RTN − PPL_BF16).
 **Observations:**
 - Llama-3.2-1B: PPL 9.756 → 11.709 (+20%). Takes 1.9 s and almost no GPU memory. The sample generation is still fluent: a 20% perplexity increase does not make the model unusable, but it does measurably hurt accuracy.
 - Llama-3.2-3B: PPL 7.817 → 8.490 (+8.6%), less than half the 1B's relative loss. Larger models tolerate rounding better.
+- Zero-shot: 1B 60.44 → 55.12 (−5.3 points), the largest loss in group A. About half of it is BoolQ, which falls to 48.3%: below a coin flip and below answering "yes" to everything (62.2%). 3B: 68.89 → 67.44 (−1.45 points).
 
 ---
 
@@ -92,6 +93,7 @@ minimize ‖W X − Ŵ X‖², where X are the layer's inputs on calibration dat
 - Llama-3.2-1B: PPL 10.610 (+8.7%). Recovers 56% of RTN's loss, the best of the three W4A16 methods. Quantization took 72 s, with a peak GPU memory of 2.3 GiB: llm-compressor moves one layer at a time to the GPU.
 - Llama-3.2-3B: PPL 8.241 (+5.4%). Recovers 37% of RTN's loss. 167 s, 2.7 GiB of GPU.
 - **Sensitive to the calibration samples.** Over 3 seeds: 1B 10.699 ± 0.164 (range 10.598–10.889), 3B 8.254 ± 0.011. This is expected from how GPTQ works: it solves a least-squares problem on the exact calibration inputs (it fits H = X Xᵀ), so it partly fits the particular samples. With an unlucky set (seed 1 on the 1B) it loses about a third of its improvement over RTN.
+- **Zero-shot (3 seeds):** 1B 58.76 ± 0.37 (−1.68 points vs BF16, recovers 68% of RTN's loss); 3B 67.75 ± 0.31 (−1.14, recovers only 21%). On the 3B it is barely better than RTN (+0.31 points), although it has the best perplexity. **Its perplexity advantage does not carry over to the tasks.** Possible reason: it fits the layer outputs on the calibration text, which helps on similar text (what perplexity measures) more than on question answering.
 
 ---
 
@@ -119,11 +121,16 @@ minimize ‖W X − Ŵ X‖², where X are the layer's inputs on calibration dat
 **Observations:**
 - Llama-3.2-1B: PPL 10.906 (+11.8%). Recovers 41% of RTN's loss, behind GPTQ. Quantization took 215 s and 9.2 GiB of GPU: 3× slower and 4× more memory than GPTQ, the **opposite** of the paper's cost claim.
 - Llama-3.2-3B: PPL 8.282 (+6.0%). Recovers 31%. 572 s, 11.6 GiB. The gap to GPTQ shrinks to 0.04 PPL.
-- **Very stable across calibration samples,** which confirms the paper's robustness claim. Over 3 seeds: 1B 10.907 ± 0.005 (about 30× less spread than GPTQ), 3B 8.280 ± 0.003 (about 4× less). AWQ only uses average activation magnitudes per channel to pick its scales, and these statistics barely change between sample sets. Trade-off seen so far: GPTQ is slightly more accurate on average, while AWQ is more predictable.
+- **Very stable across calibration samples,** which confirms the paper's robustness claim. Over 3 seeds: 1B 10.907 ± 0.005 (about 30× less spread than GPTQ), 3B 8.280 ± 0.003 (about 4× less). AWQ only uses average activation magnitudes per channel to pick its scales, and these statistics barely change between sample sets.
+- **Zero-shot (3 seeds): the best W4A16 method.** 1B 58.99 ± 0.45 (−1.45 points, recovers 73%; a tie with GPTQ). 3B 68.68 ± 0.33 (−0.21, recovers 86%): almost lossless, and clearly ahead of GPTQ (every AWQ seed beats every GPTQ seed). The gain over GPTQ comes from ARC-e, ARC-c and BoolQ.
+- Its zero-shot seed std (0.33–0.45) is as large as GPTQ's, even though its perplexity barely moves between seeds. The zero-shot average has its own noise: tiny weight changes flip near-tie questions (mostly BoolQ).
+- **Trade-off:** GPTQ has slightly better perplexity. AWQ has better zero-shot accuracy (clearly on the 3B) and much more stable perplexity, but costs 3× more time and 4× more GPU memory to quantize in llm-compressor.
 - Why AWQ costs more here: it runs each block once per candidate scale (20 times) on all 262k calibration tokens and keeps the block inputs on the GPU. GPTQ needs one pass per layer to collect statistics. Our 2048-token samples (4× the tokens of AWQ's default 128 × 512) make this heavier.
 
 **Points for the report:**
-- Seed study answered: GPTQ is ahead in every seed but by a negligible 0.027 PPL on the 3B, and AWQ is far more stable across calibration sets. Still open: does the ranking hold on zero-shot tasks, which test more than WikiText-style text?
+- Seed study answered: GPTQ is ahead in perplexity in every seed but by a negligible 0.027 PPL on the 3B, and AWQ is far more stable across calibration sets.
+- Zero-shot answered: **the perplexity ranking does not hold.** AWQ ties GPTQ on the 1B and beats it by 0.9 points on the 3B (results.md, "Accuracy: zero-shot tasks").
+- Possible extra: perplexity on C4, the calibration data, to test whether GPTQ's perplexity lead comes from fitting the calibration text.
 - Possible extras: AWQ with the paper's calibration size (128 × 512) to test the cost claim, and the original AWQ code (with clipping) to measure what the missing step is worth.
 
 ---
@@ -212,9 +219,19 @@ Y = (X · diag(s)⁻¹) · (diag(s) · W), with s_j = max|X_j|^α / max|W_j|^(1�
 - **Weight-only quantization speeds up memory-bound work only.** Single-request generation became 1.91× (1B) and 2.34× (3B) faster, about 82% of the speedup predicted from the byte ratio. Prefill and high-load throughput did not improve (0.93–1.02×), because they are limited by arithmetic, which W4A16 still does in BF16.
 - **This is exactly the distinction the mentor pointed out between W4A16 and W8A8.** W8A8 (SmoothQuant) and W4A4 (QuaRot, SpinQuant, DuQuant) also quantize activations so the INT8/INT4 tensor cores can be used. That is the only way to speed up the compute-bound workloads.
 - **The speed of a W4A16 model depends only on its format,** not on the method that chose the rounding (RTN, GPTQ and AWQ were within 1%). The choice of method is therefore purely about accuracy and quantization cost.
-- **For a fixed budget, quantize a bigger model:** a 4-bit 3B matches a BF16 1B in speed (209 vs 222 tok/s) and memory (2.15 vs 2.32 GiB), with much better perplexity (8.25 vs 9.76).
+- **For a fixed budget, quantize a bigger model:** a 4-bit 3B matches a BF16 1B in speed (209 vs 222 tok/s) and memory (2.15 vs 2.32 GiB), with much better perplexity (8.25 vs 9.76) and zero-shot accuracy (68.7 vs 60.4 with AWQ).
+
+## 10c. What the zero-shot results teach (for the discussion section)
+
+- **Perplexity and task accuracy can rank methods differently.** GPTQ has the best perplexity on both models; AWQ has the best zero-shot accuracy on the 3B by 0.9 points, where GPTQ is barely better than RTN. Do not rank methods on perplexity alone. This is why the mentor asked for both.
+- **Hypothesis to check:** GPTQ fits the calibration data, which helps on similar text. Test: perplexity on C4 (the calibration source). If GPTQ's lead over AWQ grows there, it supports the hypothesis.
+- **Zero-shot has a noise floor of about 0.3–0.5 points** in the 6-task average from calibration seeds alone, and about 0.2 points from the batch size. Smaller differences between methods mean nothing for a single checkpoint. Several seeds and the same evaluation settings for every model are needed.
+- **On small models, BoolQ mostly measures a yes/no bias.** The BF16 1B is only 1.5 points above answering "yes" to everything, and RTN falls 14 points below it. One badly shifted task can dominate the average, so per-task numbers must be reported too.
+- **Size matters more than the method:** the 3B RTN (67.4) beats every 1B model, including BF16 (60.4).
 
 ## 11. Questions for the mentor
 
 - llm-compressor's AWQ has no weight-clipping search, and it was slower and used more memory than GPTQ, the opposite of the AWQ paper's claim. Should we also run the original AWQ code (with clipping), or re-run with the paper's calibration size (128 × 512 tokens)?
+- Perplexity and zero-shot disagree: GPTQ has the better perplexity, AWQ the better zero-shot accuracy (0.9 points on the 3B). Which should weigh more in our conclusions? Is it worth testing the "GPTQ fits the calibration data" idea with perplexity on C4, or adding a harder task such as MMLU?
+- The zero-shot average varies by 0.3–0.5 points between calibration seeds. Are 3 seeds enough, and should groups B and C also use 3 seeds?
 - Group C will have no end-to-end speed numbers (no W4A4 kernels in vLLM for the A40). Is accuracy plus kernel-level speed (QuaRot's CUTLASS kernels) enough?
