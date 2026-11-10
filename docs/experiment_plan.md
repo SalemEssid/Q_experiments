@@ -29,12 +29,12 @@ Two activation formats, both INT8 symmetric, with the same weights (INT8 symmetr
 
 | Method | Implementation | Status |
 |---|---|---|
-| RTN W8A8 (reference) | llm-compressor `QuantizationModifier` | code ready |
-| SmoothQuant (α = 0.5) + RTN | llm-compressor `SmoothQuantModifier` + `QuantizationModifier` | code ready |
-| SmoothQuant α = 0.8 (sensitivity check) | same, `--alpha 0.8` | code ready |
-| RTN and SmoothQuant with `W8A8_STATIC` | same, `--scheme W8A8_STATIC` | code ready |
+| RTN W8A8 (reference) | llm-compressor `QuantizationModifier` | 1B done (PPL); 3B and zero-shot: `run_groupB.sh` |
+| SmoothQuant (α = 0.5) + RTN | llm-compressor `SmoothQuantModifier` + `QuantizationModifier` | 1B seed 0 done (PPL); seeds 1–2, 3B and zero-shot: `run_groupB.sh` |
+| SmoothQuant α = 0.8 (sensitivity check) | same, `--alpha 0.8` | 1B done (PPL); 3B and zero-shot: `run_groupB.sh` |
+| RTN and SmoothQuant with `W8A8_STATIC` | same, `--scheme W8A8_STATIC` | 1B done: broken (PPL ≈ 1300), cause found (massive activations in `down_proj`). 3B RTN check: `run_groupB.sh` |
 
-Steps: (1) RTN W8A8 on the 1B and check that activations really are quantized in evaluation; (2) SmoothQuant on the 1B; (3) both models, 3 seeds for SmoothQuant, zero-shot; (4) static activations; (5) vLLM speed.
+Steps: (1) RTN W8A8 on the 1B and check that activations really are quantized in evaluation ✓; (2) SmoothQuant on the 1B ✓; (3) static activations and diagnosis ✓; (4) both models, 3 seeds for SmoothQuant, zero-shot (`run_groupB.sh`); (5) vLLM speed.
 
 Speed and memory: vLLM (INT8 kernels).
 
@@ -101,3 +101,4 @@ These codebases simulate quantization (fake quant), so this group reports **accu
 | 2026-11-10 | SmoothQuant α = 0.5 as the main setting, α = 0.8 as a sensitivity check | 0.5 is the paper's and llm-compressor's default, fixed before seeing results, so α is not tuned on the test set. 0.8 is the value in llm-compressor's Llama W8A8 example |
 | 2026-11-10 | Two activation formats: dynamic per-token (main) and static per-tensor | With per-token scales RTN may already be near lossless, which would hide what SmoothQuant does. The static format is the case it was built for |
 | 2026-11-10 | RTN W8A8 (dynamic) runs once, not with 3 seeds | It uses no calibration data: weight scales come from the weights, activation scales from each token at run time |
+| 2026-11-10 | Group B main results use per-token (dynamic) activation scales. Static scales are reported as a diagnosis, without seeds or zero-shot | Static scales break Llama-3.2 (PPL ≈ 1300) with or without SmoothQuant, because of massive activations in `down_proj`'s input. Running seeds and tasks on a broken model would add nothing |

@@ -238,7 +238,26 @@ Seed 0 only so far. `W8A8_STATIC` = the same INT8 weights, but one fixed activat
 
 - **All three static models are broken:** PPL 1302 (RTN), 1342 (SQ α=0.5), 1322 (SQ α=0.8), against 9.89 with per-token scales. Same weights, so this is entirely the activation scale. The sample generations are degraded too: wrong facts ("located in the north-east corner of the country") and repetition ("a a a a" for SQ α=0.5).
 - **SmoothQuant does not rescue it,** although this is the setting it was designed for.
-- **Hypothesis (being tested):** a few huge values (outliers far beyond an ordinary token's range) in the input of `down_proj`, which SmoothQuant does not smooth on Llama. One fixed scale must cover them, so the scale becomes so coarse that ordinary tokens round to zero. Tests: the layer test on the static models, and `scripts/act_stats.py` on the BF16 model.
+
+**Cause, confirmed: massive activations in the input of `down_proj`.**
+
+Layer test on the static models: with BF16 inputs in `down_proj` only, perplexity comes back from 1302 to **9.987** (RTN) and from 1342 to **9.929** (SmoothQuant). Leaving q/k/v, o_proj or gate/up in BF16 changes nothing (1300–1373). All of the damage is in `down_proj`.
+
+Activation measurements (`scripts/act_stats.py`, BF16 Llama-3.2-1B, WikiText-2 test window 1 = tokens 2048–4095). "Typical" = the median over tokens of each token's largest |value|:
+
+| Block | Max abs value in `down_proj` input | At token (position) | Typical token max | Max / typical | Without that token |
+|---|---|---|---|---|---|
+| 0 | 41.2 | ' ' (85) | 0.43 | 95 | 11 |
+| **1** | **1240.0** | ' service' (**0**) | 0.47 | **2613** | 65 |
+| 2–13 | 2.4–9.6 | various | 0.65–2.62 | 4–6 | 3–5 |
+| 14 | 12.2 | ' service' (0) | 3.45 | 4 | 3 |
+| **15** | **378.0** | ' service' (**0**) | 4.59 | **82** | 7 |
+
+- **One token, not one channel:** in block 1 the most extreme value is 2613× an ordinary token's range, but only 65× once that single token is left out. These are the "massive activations" described by Sun et al. (*Massive Activations in Large Language Models*, 2024; check the exact claims before citing).
+- **The token is just the first position of the window,** an ordinary word (" service"), with no BOS token. The huge value is tied to position 0, not to a special token. The calibration windows also start at an arbitrary token, so the calibrated static scales see the same effect.
+- **Why one static scale fails:** with the scale set by the extreme (scale ≈ max/127), every value below max/254 rounds to zero. In block 1 an ordinary token's largest value is 1/2613 of the max, so **all of its `down_proj` inputs become 0**. Blocks 0 and 15 (ratio ≈ 90) leave ordinary tokens about 1–2 levels. Per-token scales do not have this problem: the extreme token gets its own scale.
+- **SmoothQuant leaves this input unchanged:** the same measurement on the SmoothQuant α=0.5 checkpoint (quantization switched off) gives the same numbers (block 1: 1240.0, ratio 2602; the small differences come from its INT8 weights). Smoothing is an exact transformation, and `down_proj` is not among the inputs it smooths.
+- **But SmoothQuant does help the layers it reaches, in the static setting:** with `down_proj` excluded, static scales on the other layers cost RTN +0.175 PPL (9.987 vs 9.812 with per-token scales and BF16 `down_proj` inputs), but SmoothQuant only +0.102 (9.929 vs 9.827). That is 42% less, which is what the method is for. With per-token scales there was nothing for it to fix.
 - **Size:** 1.40 GiB (1.65× smaller than BF16): INT8 weights plus the 0.49 GiB BF16 embedding. W4A16 is 0.96 GiB.
 - Hugging Face evaluation takes 18 s instead of 11 s, because the activation rounding is simulated in software. This says nothing about real speed (measured later in vLLM).
 
@@ -263,3 +282,4 @@ Seed 0 only so far. `W8A8_STATIC` = the same INT8 weights, but one fixed activat
 - 2026-11-10: Llama-3.2-1B SmoothQuant W8A8 (seed 0): α=0.5 PPL 9.9044 (28.1 s, 2.12 GiB GPU, 8.43 GiB RAM); α=0.8 PPL 9.8903 (28.0 s, 2.12 GiB GPU, 8.53 GiB RAM). Samples coherent. Weights-only PPL: RTN 9.7793, SQ α=0.5 9.7784, SQ α=0.8 9.7822.
 - 2026-11-10: layer test (`run_act_diag.sh`) on RTN and SQ α=0.5 W8A8: BF16 inputs in down_proj remove 70% / 62% of the activation loss; q/k/v 12% / 18%, gate/up 9% / 18%, o_proj 4% / 5%.
 - 2026-11-10: Llama-3.2-1B W8A8_STATIC (seed 0): RTN PPL 1301.9 (28.6 s), SQ α=0.5 1341.8 (53.2 s), SQ α=0.8 1322.2 (52.8 s); 2.12 GiB GPU each. All broken; samples degraded.
+- 2026-11-10: static layer test: BF16 inputs in down_proj → RTN 9.987, SQ 9.929; other groups 1300–1373. Weights-only PPL of the static checkpoints: 9.779 (RTN), 9.778 (SQ), same as the dynamic ones. `act_stats.py` (BF16 and SQ α=0.5, window 1): down_proj input of block 1 has max 1240 at position 0, 2613× (2602× for SQ) the typical token range, 65× without that token; blocks 0 and 15 about 90×.

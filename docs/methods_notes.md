@@ -168,7 +168,8 @@ Y = (X · diag(s)⁻¹) · (diag(s) · W), with s_j = max|X_j|^α / max|W_j|^(1�
 - Llama-3.2-1B, `W8A8` (per-token activation scales), seed 0: α=0.5 PPL 9.904, α=0.8 9.890, vs RTN 9.888 and BF16 9.756. **No gain over plain rounding.** Quantization takes 28 s and 2.1 GiB of GPU (one calibration pass to collect the activation maxima).
 - The error split shows why it cannot gain much: RTN's loss is mostly activations (+0.109 of +0.132), but smoothing leaves that part unchanged (+0.108 at α=0.8) while adding a little weight loss (+0.026 vs +0.023).
 - **Confirmed by the layer test:** `down_proj`'s input causes 70% of RTN's activation loss, and SmoothQuant cannot smooth it on Llama (its cost stays 0.076–0.077). In the layers it does smooth, it made the activation loss *larger* (q/k/v 0.013 → 0.022, gate/up 0.009 → 0.022).
-- **Static per-layer activation scales (`W8A8_STATIC`) break the model:** PPL about 1300 for RTN and for both α. SmoothQuant does not rescue the setting it was designed for, on this model. Suspected cause: a few huge values in `down_proj`'s input, which it cannot smooth. Being checked with `run_act_diag.sh` and `act_stats.py`.
+- **Static per-layer activation scales (`W8A8_STATIC`) break the model:** PPL about 1300 for RTN and for both α. SmoothQuant does not rescue the setting it was designed for, on this model. **Cause, confirmed:** massive activations in `down_proj`'s input (block 1: one value 2613× an ordinary token's range, at the first position of the window). With BF16 `down_proj` inputs the static models are back to 9.99 (RTN) and 9.93 (SQ). See section 10d.
+- In the static setting SmoothQuant *does* help the layers it reaches: excluding `down_proj`, it cuts the cost of static scales on the other layers by 42% (+0.102 vs +0.175 PPL).
 - **For the report:** SmoothQuant's published results are on OPT, BLOOM and earlier Llama models. Its standard Llama mappings leave out the input that matters most on Llama-3.2. This is a limitation of the method's design (it smooths only inputs that follow a norm), not only of llm-compressor.
 
 ---
@@ -250,9 +251,29 @@ Y = (X · diag(s)⁻¹) · (diag(s) · W), with s_j = max|X_j|^α / max|W_j|^(1�
 - **On small models, BoolQ mostly measures a yes/no bias.** The BF16 1B is only 1.5 points above answering "yes" to everything, and RTN falls 14 points below it. One badly shifted task can dominate the average, so per-task numbers must be reported too.
 - **Size matters more than the method:** the 3B RTN (67.4) beats every 1B model, including BF16 (60.4).
 
+## 10d. Two kinds of outliers: what each method can fix (bridge from group B to group C)
+
+Measured on Llama-3.2-1B (results.md, group B). Both kinds are "outliers", but they need different fixes.
+
+| | Channel outliers | Massive activations (token outliers) |
+|---|---|---|
+| What | The same few channels are large in (almost) every token | A few tokens have values hundreds to thousands of times larger than ordinary tokens, in a few channels |
+| Where we saw them | Spread over all inputs; `down_proj`'s input is the most uneven (70% of the per-token W8A8 activation loss) | `down_proj`'s input in blocks 0, 1 and 15. Block 1: 1240 vs a typical 0.47 (2613×), at **position 0** of the window, whatever the word is |
+| Per-token dynamic scale | Does not help: the outlier channel is in every token | **Handles it:** the extreme token gets its own scale |
+| One static scale per layer | Hurts | **Breaks the model** (PPL ≈ 1300): ordinary tokens round to zero |
+| SmoothQuant (per-channel scaling) | **Designed for this**, but only for inputs after a norm (not `down_proj` on Llama) | Cannot fix: dividing a channel affects every token, while the problem is one token. The scaling also moves into the weights |
+| Rotations (QuaRot, SpinQuant) | **Fix it:** a Hadamard rotation spreads one large channel over all channels of the token. QuaRot rotates `down_proj`'s input online for exactly this reason | Spread the extreme token's values evenly, but cannot make the token small. They keep **per-token** activation scales for that |
+| DuQuant | **Fixes it:** rotations plus a zigzag permutation | Its paper explicitly targets these "massive outliers" at `down_proj`'s input. It also relies on per-token activation scales (check the paper) |
+| Not in our list | | PrefixQuant (Chen et al., 2024) handles the few massive tokens separately so that static scales work (check before citing) |
+
+**Predictions for group C:**
+1. Rotations should cut the `down_proj` error that dominates per-token W8A8 (70% of the activation loss here). This matters much more at W4A4, with 16 levels instead of 256.
+2. None of the group C methods is meant to make one static scale per layer work, because they all keep per-token activation scales.
+
 ## 11. Questions for the mentor
 
 - llm-compressor's AWQ has no weight-clipping search, and it was slower and used more memory than GPTQ, the opposite of the AWQ paper's claim. Should we also run the original AWQ code (with clipping), or re-run with the paper's calibration size (128 × 512 tokens)?
 - Perplexity and zero-shot disagree: GPTQ has the better perplexity, AWQ the better zero-shot accuracy (0.9 points on the 3B). Which should weigh more in our conclusions? Is it worth testing the "GPTQ fits the calibration data" idea with perplexity on C4, or adding a harder task such as MMLU?
+- SmoothQuant gives no gain with per-token activation scales and cannot save static scales on Llama-3.2, because of massive activations at `down_proj`'s input. Should group B keep SmoothQuant as the only W8A8 method, or also test a variant that handles `down_proj` (static scales everywhere except the 3 affected `down_proj` layers, or an `up_proj → down_proj` smoothing mapping)?
 - The zero-shot average varies by 0.3–0.5 points between calibration seeds. Are 3 seeds enough, and should groups B and C also use 3 seeds?
 - Group C will have no end-to-end speed numbers (no W4A4 kernels in vLLM for the A40). Is accuracy plus kernel-level speed (QuaRot's CUTLASS kernels) enough?
