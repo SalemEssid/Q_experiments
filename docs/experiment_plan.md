@@ -29,12 +29,12 @@ Two activation formats, both INT8 symmetric, with the same weights (INT8 symmetr
 
 | Method | Implementation | Status |
 |---|---|---|
-| RTN W8A8 (reference) | llm-compressor `QuantizationModifier` | 1B done (PPL); 3B and zero-shot: `run_groupB.sh` |
-| SmoothQuant (α = 0.5) + RTN | llm-compressor `SmoothQuantModifier` + `QuantizationModifier` | 1B seed 0 done (PPL); seeds 1–2, 3B and zero-shot: `run_groupB.sh` |
-| SmoothQuant α = 0.8 (sensitivity check) | same, `--alpha 0.8` | 1B done (PPL); 3B and zero-shot: `run_groupB.sh` |
-| RTN and SmoothQuant with `W8A8_STATIC` | same, `--scheme W8A8_STATIC` | 1B done: broken (PPL ≈ 1300), cause found (massive activations in `down_proj`). 3B RTN check: `run_groupB.sh` |
+| RTN W8A8 (reference) | llm-compressor `QuantizationModifier` | done (1B, 3B): perplexity, zero-shot. Speed: next |
+| SmoothQuant (α = 0.5) + RTN | llm-compressor `SmoothQuantModifier` + `QuantizationModifier` | done (1B, 3B; 3 seeds): perplexity, zero-shot. Speed: next |
+| SmoothQuant α = 0.8 (sensitivity check) | same, `--alpha 0.8` | done (1B, 3B; seed 0): perplexity, zero-shot |
+| RTN and SmoothQuant with `W8A8_STATIC` | same, `--scheme W8A8_STATIC` | done as a diagnosis: broken on both models (1B ≈ 1300, 3B 60.6), cause found (massive activations in `down_proj`) |
 
-Steps: (1) RTN W8A8 on the 1B and check that activations really are quantized in evaluation ✓; (2) SmoothQuant on the 1B ✓; (3) static activations and diagnosis ✓; (4) both models, 3 seeds for SmoothQuant, zero-shot (`run_groupB.sh`); (5) vLLM speed.
+Steps: (1) RTN W8A8 on the 1B and check that activations really are quantized in evaluation ✓; (2) SmoothQuant on the 1B ✓; (3) static activations and diagnosis ✓; (4) both models, 3 seeds for SmoothQuant, zero-shot ✓ (`run_groupB.sh`); (5) vLLM speed (`run_speed_groupB.sh`).
 
 Speed and memory: vLLM (INT8 kernels).
 

@@ -182,23 +182,30 @@ When one request generates tokens, every token requires reading all the weights 
 - **vLLM and Hugging Face agree:** the GPTQ checkpoint generated word-for-word the same greedy text in vLLM (Marlin kernel) as in Hugging Face, so the speed and accuracy numbers describe the same model.
 - **Measurement quality:** the GPU probe read 101–107 TFLOPS around every run (an idle GPU gives about 110; sharing with the other VM would give roughly half), so there was no interference. The value after each run is consistently about 3% lower, probably because the GPU is warmer after sustained load. RTN, GPTQ and AWQ, which should be identical, agree within 0.5% on TPOT, so the noise is small.
 
-## Group B: W8A8 INT8 (in progress)
+## Group B: W8A8 INT8 (accuracy done; speed in progress)
 
 `W8A8` = INT8 symmetric weights (one scale per output channel) and INT8 symmetric activations (one scale per token, computed at run time). `lm_head` stays BF16. Plan and settings: experiment_plan.md and methods_notes.md, section 6.
 
-| Model | Method | Scheme | WikiText-2 PPL | Δ vs BF16 | Size on disk | Quantization cost |
-|---|---|---|---|---|---|---|
-| Llama-3.2-1B | BF16 | – | 9.756 | – | 2.30 GiB | – |
-| Llama-3.2-1B | RTN | W8A8 | 9.888 | +0.132 (+1.4%) | 1.40 GiB | 1.6 s, 0.03 GiB GPU |
-| Llama-3.2-1B | SmoothQuant α=0.5 | W8A8 | 9.904 | +0.148 (+1.5%) | 1.40 GiB | 28.1 s, 2.12 GiB GPU |
-| Llama-3.2-1B | SmoothQuant α=0.8 | W8A8 | 9.890 | +0.134 (+1.4%) | 1.40 GiB | 28.0 s, 2.12 GiB GPU |
-| Llama-3.2-1B | RTN | W8A8_STATIC | **1301.9** | broken | 1.40 GiB | 28.6 s, 2.12 GiB GPU |
-| Llama-3.2-1B | SmoothQuant α=0.5 | W8A8_STATIC | **1341.8** | broken | 1.40 GiB | 53.2 s, 2.12 GiB GPU |
-| Llama-3.2-1B | SmoothQuant α=0.8 | W8A8_STATIC | **1322.2** | broken | 1.40 GiB | 52.8 s, 2.12 GiB GPU |
+| Model | Method | Scheme | WikiText-2 PPL ↓ | Δ vs BF16 | Zero-shot avg ↑ | Δ vs BF16 (points) | Size on disk | Quantization cost |
+|---|---|---|---|---|---|---|---|---|
+| Llama-3.2-1B | BF16 | – | 9.756 | – | 60.44 | – | 2.30 GiB | – |
+| Llama-3.2-1B | RTN | W8A8 | **9.888** | +0.132 (+1.4%) | 59.95 | −0.49 | 1.40 GiB | 1.6 s, 0.03 GiB GPU |
+| Llama-3.2-1B | SmoothQuant α=0.5 | W8A8 | 9.903 ± 0.003 | +0.147 (+1.5%) | **60.48 ± 0.06** | +0.04 | 1.40 GiB | 28 s, 2.12 GiB GPU |
+| Llama-3.2-1B | SmoothQuant α=0.8 | W8A8 | 9.890 | +0.134 (+1.4%) | 60.24 | −0.20 | 1.40 GiB | 28 s, 2.12 GiB GPU |
+| Llama-3.2-1B | RTN | W8A8_STATIC | 1301.9 | broken | – | – | 1.40 GiB | 28.6 s, 2.12 GiB GPU |
+| Llama-3.2-1B | SmoothQuant α=0.5 | W8A8_STATIC | 1341.8 | broken | – | – | 1.40 GiB | 53.2 s, 2.12 GiB GPU |
+| Llama-3.2-1B | SmoothQuant α=0.8 | W8A8_STATIC | 1322.2 | broken | – | – | 1.40 GiB | 52.8 s, 2.12 GiB GPU |
+| Llama-3.2-3B | BF16 | – | 7.817 | – | 68.89 | – | 5.98 GiB | – |
+| Llama-3.2-3B | RTN | W8A8 | 7.889 | +0.072 (+0.9%) | 68.38 | −0.51 | 3.36 GiB | 2.4 s, 0.05 GiB GPU |
+| Llama-3.2-3B | SmoothQuant α=0.5 | W8A8 | 7.890 ± 0.001 | +0.073 (+0.9%) | 68.50 ± 0.13 | −0.39 | 3.36 GiB | 65 s, 2.46 GiB GPU |
+| Llama-3.2-3B | SmoothQuant α=0.8 | W8A8 | **7.881** | +0.064 (+0.8%) | **68.78** | −0.11 | 3.36 GiB | 65 s, 2.46 GiB GPU |
+| Llama-3.2-3B | RTN | W8A8_STATIC | 60.6 | broken | – | – | 3.36 GiB | 66.0 s, 2.46 GiB GPU |
 
-Seed 0 only so far. `W8A8_STATIC` = the same INT8 weights, but one fixed activation scale per layer measured on the calibration data (llm-compressor's `minmax` observer). Static RTN needs a calibration pass too, hence 28.6 s. Peak CPU RAM: 3.5 GiB (RTN), 8.4–8.5 GiB (SmoothQuant, which holds the calibration activations).
+- SmoothQuant α=0.5: mean ± sample std over calibration seeds 0, 1, 2. α=0.8 and the static models: seed 0 only. RTN `W8A8` uses no calibration data. Bold: best quantized result per model and metric (all differences between the `W8A8` rows are small, see the findings).
+- `W8A8_STATIC` = the same INT8 weights, but one fixed activation scale per layer measured on the calibration data (llm-compressor's `minmax` observer). Static RTN needs a calibration pass too, hence 28.6 s / 66.0 s. Peak CPU RAM on the 1B: 3.5 GiB (RTN), 8.4–8.5 GiB (SmoothQuant, which holds the calibration activations).
+- Compression vs BF16: 1.65× (1B) and 1.78× (3B). The INT8 checkpoint holds the 8-bit weights plus the BF16 embedding (0.49 / 0.73 GiB).
 
-**Activation quantization is really applied in evaluation:** `ppl_eval.py` found 112 layers with INT8 input activations (16 blocks × 7 Linear layers; `lm_head` excluded). The first-window loss is 1.99390 with activation quantization and 1.98569 without it.
+**Activation quantization is really applied in evaluation:** `ppl_eval.py` found 112 layers with INT8 input activations on the 1B (16 blocks × 7 Linear layers; `lm_head` excluded). The first-window loss is 1.99390 with activation quantization and 1.98569 without it. The check runs on every evaluation.
 
 ### Error split: weights vs activations
 
@@ -206,15 +213,42 @@ Seed 0 only so far. `W8A8_STATIC` = the same INT8 weights, but one fixed activat
 
 | Model | Method | BF16 PPL | Weights only PPL | W8A8 PPL | Loss from weights | Extra loss from activations |
 |---|---|---|---|---|---|---|
-| Llama-3.2-1B | RTN | 9.756 | 9.779 | 9.888 | +0.023 | +0.109 |
-| Llama-3.2-1B | SmoothQuant α=0.5 | 9.756 | 9.778 | 9.904 | +0.022 | +0.126 |
+| Llama-3.2-1B | RTN | 9.756 | 9.779 | 9.888 | +0.023 | +0.109 (83%) |
+| Llama-3.2-1B | SmoothQuant α=0.5 (seeds 0 / 1 / 2) | 9.756 | 9.778 / 9.780 / 9.780 | 9.904 / 9.899 / 9.905 | +0.022 / +0.023 / +0.023 | +0.126 / +0.120 / +0.126 |
 | Llama-3.2-1B | SmoothQuant α=0.8 | 9.756 | 9.782 | 9.890 | +0.026 | +0.108 |
+| Llama-3.2-3B | RTN | 7.817 | 7.823 | 7.889 | +0.006 | +0.066 (92%) |
+| Llama-3.2-3B | SmoothQuant α=0.5 (seeds 0 / 1 / 2) | 7.817 | 7.825 / 7.824 / 7.822 | 7.891 / 7.889 / 7.891 | +0.008 / +0.007 / +0.005 | +0.066 / +0.065 / +0.069 |
+| Llama-3.2-3B | SmoothQuant α=0.8 | 7.817 | 7.825 | 7.881 | +0.008 | **+0.056** |
 
-### First observations
-- **8-bit RTN is already close to BF16 on the 1B:** +0.13 PPL, 15× less than RTN at W4A16 (+1.95) and less than the best W4A16 method (GPTQ, +0.94 on average).
-- **83% of the W8A8 loss comes from the activations** (+0.109 of +0.132). 8-bit weights alone cost only +0.023.
-- **SmoothQuant does not help with per-token activation scales:** α=0.5 is slightly worse than RTN (+0.148 vs +0.132), α=0.8 equal (+0.134). With α=0.8 the weight loss grows a little (+0.026 vs +0.023), so difficulty did move to the weights, as intended, but the activation loss did not shrink (+0.108 vs +0.109). Differences of 0.01–0.02 PPL may be within calibration-seed noise (not measured yet). Either way, there is no gain.
-- **Likely reason:** on Llama, SmoothQuant smooths only the inputs of q/k/v and gate/up. If most of the activation loss comes from the inputs of `o_proj` or `down_proj`, which it cannot smooth, smoothing the others cannot help. The layer test below confirms this.
+### Zero-shot per task
+
+Same tasks and settings as group A (batch size 16). SmoothQuant α=0.5: mean of the three seeds (from the 1-decimal values, so ±0.05).
+
+| Model | Method | ARC-e | ARC-c | HellaSwag | PIQA | WinoGrande | BoolQ | Avg |
+|---|---|---|---|---|---|---|---|---|
+| Llama-3.2-1B | BF16 | 61.8 | 36.9 | 64.3 | 74.7 | 61.3 | 63.7 | 60.44 |
+| Llama-3.2-1B | RTN W8A8 | 62.1 | 36.3 | 63.8 | 75.0 | 59.8 | 62.8 | 59.95 |
+| Llama-3.2-1B | SmoothQuant α=0.5 | 62.2 | 37.2 | 63.9 | 74.6 | 61.3 | 63.6 | 60.48 ± 0.06 |
+| Llama-3.2-1B | SmoothQuant α=0.8 | 62.1 | 36.7 | 63.9 | 74.1 | 61.0 | 63.6 | 60.24 |
+| Llama-3.2-3B | BF16 | 71.9 | 46.1 | 74.1 | 77.8 | 69.8 | 73.7 | 68.89 |
+| Llama-3.2-3B | RTN W8A8 | 71.5 | 46.1 | 73.9 | 77.2 | 69.7 | 72.0 | 68.38 |
+| Llama-3.2-3B | SmoothQuant α=0.5 | 71.3 | 46.5 | 73.8 | 77.3 | 69.2 | 72.9 | 68.50 ± 0.13 |
+| Llama-3.2-3B | SmoothQuant α=0.8 | 71.6 | 46.2 | 73.9 | 77.5 | 69.8 | 73.7 | 68.78 |
+
+SmoothQuant α=0.5 per seed: 1B 60.52 / 60.41 / 60.50, 3B 68.65 / 68.41 / 68.45.
+
+### Findings (accuracy, `W8A8` with per-token scales)
+
+- **8-bit is close to lossless on both models, even with plain rounding:** RTN loses +0.132 PPL (1B) and +0.072 (3B), about 7× and 6× less than the best W4A16 method (GPTQ: +0.94 / +0.44). On zero-shot, RTN loses about 0.5 points on both models, which is the size of the noise. BoolQ on the 1B stays at 62.8, while RTN W4A16 broke it (48.3).
+- **Most of the loss comes from the activations:** 83% (1B) and 92% (3B). 8-bit weights alone cost only +0.023 / +0.006 PPL.
+- **SmoothQuant brings no reliable gain:**
+  - α=0.5 (the main setting): on perplexity, slightly worse than RTN on the 1B (9.903 vs 9.888; all three seeds are worse) and equal on the 3B (7.890 vs 7.889). On zero-shot, +0.53 points on the 1B and +0.12 on the 3B. The 1B gain is mostly WinoGrande (+1.5, about one standard error of that task) and runs against the perplexity, so it is not a clear improvement.
+  - α=0.8 (sensitivity check): equal to RTN on the 1B (9.890). Slightly better on the 3B: 7.881, which wins back 11% of RTN's loss, and the activation loss drops from +0.066 to +0.056. This is the only case where smoothing helped with per-token scales. It is a single seed, but the gap (0.008) is 8× the seed std of α=0.5. Its zero-shot average (68.78) is within noise of the others. α=0.5 stays the main setting, as decided in advance (choosing α on these test results would tune on the test set).
+  - **Reason:** the largest part of the activation loss sits in `down_proj`'s input (70% on the 1B, layer test below), which SmoothQuant does not smooth on Llama. Per-token scales already handle the extreme tokens.
+- **SmoothQuant hardly depends on the calibration samples:** PPL std 0.003 (1B) and 0.001 (3B), zero-shot std 0.06 and 0.13. This matches AWQ (std 0.005 / 0.003). Both methods only use per-channel activation sizes, which barely change between sample sets.
+- **The 3B is more robust again:** +0.9% PPL vs +1.4% on the 1B.
+- **Quantization cost:** SmoothQuant takes 28 s (1B) and 65 s (3B), with 2.1–2.5 GiB of GPU memory: one calibration pass to collect channel ranges. That is cheaper than GPTQ (72 / 167 s) and AWQ (215 / 572 s) at W4A16. RTN takes 2 s.
+- **Compared with W4A16 (accuracy only; the two formats save different things):** on the 1B, even RTN W8A8 (+0.13 PPL, −0.49 points) beats every W4A16 method (best: +0.94 PPL, −1.45 points). On the 3B, perplexity separates them clearly (+0.07 vs +0.44), but on zero-shot AWQ W4A16 (−0.21) and W8A8 (−0.11 to −0.51) are all within noise of BF16. Zero-shot cannot separate losses this small; perplexity can.
 
 ### Which layers cause the activation loss (`W8A8`, per-token scales)
 
@@ -257,9 +291,37 @@ Activation measurements (`scripts/act_stats.py`, BF16 Llama-3.2-1B, WikiText-2 t
 - **The token is just the first position of the window,** an ordinary word (" service"), with no BOS token. The huge value is tied to position 0, not to a special token. The calibration windows also start at an arbitrary token, so the calibrated static scales see the same effect.
 - **Why one static scale fails:** with the scale set by the extreme (scale ≈ max/127), every value below max/254 rounds to zero. In block 1 an ordinary token's largest value is 1/2613 of the max, so **all of its `down_proj` inputs become 0**. Blocks 0 and 15 (ratio ≈ 90) leave ordinary tokens about 1–2 levels. Per-token scales do not have this problem: the extreme token gets its own scale.
 - **SmoothQuant leaves this input unchanged:** the same measurement on the SmoothQuant α=0.5 checkpoint (quantization switched off) gives the same numbers (block 1: 1240.0, ratio 2602; the small differences come from its INT8 weights). Smoothing is an exact transformation, and `down_proj` is not among the inputs it smooths.
+- **The calibrated static scales match the measured extremes:** the scale saved in the checkpoint for each `down_proj` input covers a largest value of 127 × scale. That is 41.7 (block 0), **1191 (block 1)**, 2.5–13 (blocks 2–14) and 363 (block 15), against 41.2, 1240, 2.4–12 and 378 measured on WikiText-2. Calibration (C4) found the same massive values, so they are a property of the model, not of the data. In block 1, every value below 4.69 rounds to 0, while an ordinary token's *largest* value is about 0.47: that layer receives only zeros for every ordinary token.
+- **Three layers out of 112 cause the collapse.** Static RTN with BF16 inputs in only some `down_proj` layers:
+
+  | `down_proj` inputs kept in BF16 | Layers | PPL |
+  |---|---|---|
+  | none (all static) | 0 of 112 | 1301.9 |
+  | block 1 | 1 | 71.97 |
+  | blocks 0, 1 and 15 | 3 | **10.891** |
+  | all 16 blocks | 16 | 9.987 |
+  | *reference: per-token scales in every layer* | – | *9.888* |
+
+- **For `down_proj`, per-token scales matter even without the massive tokens:** the 13 other `down_proj` layers, with no extreme values (ratio 4–6), still cost +0.90 PPL with static scales (10.891 vs 9.987). Their input is spiky within each token, so a per-token scale is several times finer than one fixed scale (block 2: a typical token's own scale would be about 0.72/127 ≈ 0.0057, the static one is 0.0229).
 - **But SmoothQuant does help the layers it reaches, in the static setting:** with `down_proj` excluded, static scales on the other layers cost RTN +0.175 PPL (9.987 vs 9.812 with per-token scales and BF16 `down_proj` inputs), but SmoothQuant only +0.102 (9.929 vs 9.827). That is 42% less, which is what the method is for. With per-token scales there was nothing for it to fix.
-- **Size:** 1.40 GiB (1.65× smaller than BF16): INT8 weights plus the 0.49 GiB BF16 embedding. W4A16 is 0.96 GiB.
-- Hugging Face evaluation takes 18 s instead of 11 s, because the activation rounding is simulated in software. This says nothing about real speed (measured later in vLLM).
+- Hugging Face evaluation takes 18 s instead of 11 s, because the activation rounding is simulated in software. This says nothing about real speed (measured in vLLM).
+
+**The 3B: same failure, same cause.**
+
+- Static RTN on the 3B: PPL **60.6**, against 7.889 with per-token scales. Less extreme than the 1B (1302), but still unusable.
+- With BF16 inputs in `down_proj` only, it comes back to **7.948**. So, as on the 1B, practically all of the damage is in `down_proj` (99.8% of the activation loss, taking the weights-only PPL 7.823 of RTN `W8A8`, which has the same INT8 weights; on the 1B the two checkpoints gave the same weights-only PPL, 9.779).
+- Activation measurements, BF16 Llama-3.2-3B, same window as the 1B:
+
+  | Block | Max abs value in `down_proj` input | At token (position) | Typical token max | Max / typical | Without that token |
+  |---|---|---|---|---|---|
+  | 0 | 3.5 | ' the' (34) | 0.46 | 8 | 6 |
+  | **1** | **732.0** | ' service' (**0**) | 0.52 | **1420** | 10 |
+  | 2–26 | 3.0–21.5 | various (position 0 in blocks 12, 13 and 25) | 0.71–3.88 | 4–8 | 4–6 |
+  | **27** (last) | **536.0** | ' service' (**0**) | 8.88 | **60** | 6 |
+
+- **The same pattern as the 1B:** massive activations at position 0 in the second block (block 1) and in the last block. Unlike the 1B, block 0 has none (3.5, ratio 8 vs 41.2, ratio 95). So the 3B has two extreme `down_proj` inputs out of 28, the 1B three out of 16.
+- In block 1 the ratio (1420) is far above 254, so with a scale set by the extreme, every ordinary token's `down_proj` input rounds to zero, as on the 1B. (This assumes the calibrated 3B scales again match the measured maxima; they were only checked on the 1B.)
+- **Why the 3B is less broken (hypothesis, not tested):** it has one extreme layer fewer, the extremes of its last block are milder (ratio 60 vs 82), and with 28 blocks a single zeroed MLP output is a smaller part of the whole computation. The 3B's ordinary tokens are also more even: without the extreme token, every block's ratio is 4–10, against up to 65 on the 1B.
 
 ## Log
 
@@ -283,3 +345,7 @@ Activation measurements (`scripts/act_stats.py`, BF16 Llama-3.2-1B, WikiText-2 t
 - 2026-11-10: layer test (`run_act_diag.sh`) on RTN and SQ α=0.5 W8A8: BF16 inputs in down_proj remove 70% / 62% of the activation loss; q/k/v 12% / 18%, gate/up 9% / 18%, o_proj 4% / 5%.
 - 2026-11-10: Llama-3.2-1B W8A8_STATIC (seed 0): RTN PPL 1301.9 (28.6 s), SQ α=0.5 1341.8 (53.2 s), SQ α=0.8 1322.2 (52.8 s); 2.12 GiB GPU each. All broken; samples degraded.
 - 2026-11-10: static layer test: BF16 inputs in down_proj → RTN 9.987, SQ 9.929; other groups 1300–1373. Weights-only PPL of the static checkpoints: 9.779 (RTN), 9.778 (SQ), same as the dynamic ones. `act_stats.py` (BF16 and SQ α=0.5, window 1): down_proj input of block 1 has max 1240 at position 0, 2613× (2602× for SQ) the typical token range, 65× without that token; blocks 0 and 15 about 90×.
+- 2026-11-10: static RTN with BF16 inputs in block 1's down_proj only: PPL 71.97; in blocks 0, 1, 15: 10.891. Saved down_proj input scales: block 0 0.328, block 1 9.375, block 15 2.859, blocks 2–14 0.020–0.105.
+- 2026-11-10: `run_groupB.sh` finished. 1B SQ α=0.5 seeds 1 and 2: PPL 9.899 / 9.905 (27.9 / 28.0 s); weights-only 9.780 / 9.780. 3B RTN W8A8: PPL 7.889 (2.4 s, 0.05 GiB GPU), weights-only 7.823. 3B SQ α=0.5 seeds 0 / 1 / 2: 7.891 / 7.889 / 7.891 (65 s, 2.46 GiB GPU), weights-only 7.825 / 7.824 / 7.822. 3B SQ α=0.8: 7.881, weights-only 7.825. All 3B W8A8 checkpoints 3.361 GiB.
+- 2026-11-10: 3B RTN W8A8_STATIC: PPL 60.612 (66.0 s, 2.46 GiB GPU). With BF16 down_proj inputs: 7.948. `act_stats.py` on BF16 3B: down_proj input max 732 in block 1 (position 0, ratio 1420) and 536 in block 27 (position 0, ratio 60); other blocks ratio 4–8.
+- 2026-11-10: zero-shot of all W8A8 models (batch 16). 1B: RTN 59.95, SQ α=0.5 60.52 / 60.41 / 60.50, α=0.8 60.24. 3B: RTN 68.38, SQ α=0.5 68.65 / 68.41 / 68.45, α=0.8 68.78.
