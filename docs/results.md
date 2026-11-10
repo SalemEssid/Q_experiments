@@ -296,11 +296,8 @@ Single-request generation vs the memory-bandwidth limit (same method as group A;
   - W8A8 wins prefill and serving many requests, because it makes the arithmetic cheaper.
   - So which format is best depends on the workload. This is the mentor's point that W4A16 and W8A8 are not directly comparable.
 - **Single-request generation follows the byte ratio again:** 79% (1B) and 83% (3B) of the predicted speedup. W4A16 reached 82–83%. The fixed costs are the same (attention, norms, the BF16 `lm_head`, kernel launches).
-- **Prefill is faster, but not 2× faster:**
-  - On paper, the A40's INT8 tensor cores have twice the BF16 peak (spec sheet; check before quoting).
-  - Counted in FLOPs (2 × non-embedding parameters per token, plus attention), W8A8 prefill runs at the equivalent of about 115 TFLOPS (1B) and 136 (3B). BF16 runs at 87 and 97. That is 54–65% of twice the measured BF16 matmul speed.
-  - Possible reasons, not separated yet: INT8 matmuls may not reach 2× of BF16 on this vGPU for these matrix shapes; the extra kernels that quantize the activations cost time; and attention stays in BF16. A plain INT8-vs-BF16 matmul test would separate the first reason from the others.
-- **Throughput gains less than prefill** (1.17–1.21× vs 1.32–1.40×). Likely reason (not measured): the throughput run is mostly generation steps, and two parts of those steps are not sped up. Attention reads the KV cache in BF16. The BF16 `lm_head` runs for every new token, and it is 21% of the matmul work per token on the 1B and 12% on the 3B.
+- **Prefill is faster, but not 2× faster,** although the GPU does run a large INT8 matmul about 2× faster than BF16. The test below finds three causes of similar size: the fifth of the time that is not matmuls, INT8 matmuls that are only 1.4–1.8× faster on Llama-3.2's layer shapes, and the separate kernel that quantizes the activations. See "Why prefill is not 2× faster" below.
+- **Throughput gains less than prefill** (1.17–1.21× vs 1.32–1.40×). In the generation steps (one new token for each of up to 256 requests), the INT8 layers are hardly faster than BF16: 1.00× on the 1B, 1.30× on the 3B, measured below. The BF16 `lm_head` adds 10–18% to every step. The throughput test still gains because two thirds of the tokens it processes are prompt tokens (256 × 512 prompt vs 256 × 256 generated), and those get the prefill speedup.
 - **Static scales are not faster than per-token scales:**
   - Static vs per-token RTN: prefill +1.0% / +1.2%, throughput +0.2% / +0.1%, single-request generation −1.0% / −0.5%.
   - That is about the noise level. RTN and SmoothQuant, which have the same format, differ by up to 0.9% in prefill.
@@ -311,6 +308,63 @@ Single-request generation vs the memory-bandwidth limit (same method as group A;
 - **Memory:** 1.41 / 3.45 GiB of weights on the GPU (BF16 2.32 / 6.04, W4A16 0.99 / 2.15). The KV cache gets +3% / +17% more room: the 3B fits about 171 full requests (512 + 256 tokens) at once, against 147 for BF16 and 187 for W4A16.
 - **Short prompts:** TTFT for 128 tokens drops 7% (1B) and 16% (3B), a little less than with W4A16 (8% / 20%). A prompt this short is still partly limited by reading the weights.
 - **Measurement quality:** the GPU probe read 103.9–108.0 TFLOPS around every run, so the GPU was not shared during the measurements.
+
+### Why prefill is not 2× faster
+
+`scripts/int8_matmul_test.py` (vllm venv) runs each piece of a W8A8 layer the way vLLM runs it: first `scaled_int8_quant` (BF16 activations → INT8 plus one scale per token), then `cutlass_scaled_mm` (the INT8 matmul, which applies the scales at the end and writes BF16). It does this on the real layer shapes, as vLLM fuses them, and compares with the BF16 layer (cuBLAS). 8192 tokens per step is vLLM's `max_num_batched_tokens` in our runs (checked in the benchmark log). Kernel check: the INT8 path matches a float reference within 1.7e-3 (BF16 rounding).
+
+**1. The GPU does deliver about 2× on a large matmul** (8192 × 8192 × 8192): BF16 108.6 TFLOPS, INT8 raw cuBLAS 222.0 TOPS (2.04×), INT8 with vLLM's CUTLASS kernel (scales included) 199.3 TOPS (1.84×).
+
+**2. On Llama-3.2's layer shapes, INT8 matmuls are only 1.36–1.76× faster** (8192 tokens per step, one layer):
+
+| Model | Layer (N × K) | BF16 (µs) | INT8 matmul (µs) | Quantize activations (µs) | Matmul speedup | Speedup incl. quantization | BF16 TFLOPS | INT8 TOPS |
+|---|---|---|---|---|---|---|---|---|
+| 1B | qkv_proj (3072 × 2048) | 1023 | 674 | 83 | 1.52× | 1.35× | 101 | 153 |
+| 1B | o_proj (2048 × 2048) | 692 | 454 | 83 | 1.52× | 1.29× | 99 | 151 |
+| 1B | gate_up_proj (16384 × 2048) | 4851 | 3556 | 83 | 1.36× | 1.33× | 113 | 155 |
+| 1B | down_proj (2048 × 8192) | 2534 | 1440 | 395 | 1.76× | 1.38× | 108 | 191 |
+| 3B | qkv_proj (5120 × 3072) | 2292 | 1521 | 124 | 1.51× | 1.39× | 112 | 169 |
+| 3B | o_proj (3072 × 3072) | 1410 | 928 | 124 | 1.52× | 1.34× | 110 | 167 |
+| 3B | gate_up_proj (16384 × 3072) | 7139 | 4830 | 124 | 1.48× | 1.44× | 116 | 171 |
+| 3B | down_proj (3072 × 8192) | 3719 | 2136 | 395 | 1.74× | 1.47× | 111 | 193 |
+
+- **INT8 speed depends on K,** the input size of the layer (the length of each dot product). It reaches about 153 TOPS at K = 2048, 169 at K = 3072 and 192 at K = 8192 (square: 199). BF16 stays at 99–116 TFLOPS whatever the shape.
+- Most layers have K = the hidden size (2048 / 3072), which is short for the INT8 kernel. The largest layer, `gate_up_proj` (about half of the matmul time), gains the least: 1.36× / 1.48×.
+- **The quantization kernel is already as fast as it can be:** it moves data at 510–610 GB/s (73–87% of the memory bandwidth). It reads the BF16 activations once and writes them out as INT8. A separate kernel cannot do better; only merging it into the previous kernel (RMSNorm or SiLU) would remove its cost.
+
+**3. About a fifth of the prefill time is not matmuls** (attention, norms, SiLU, rotary embeddings, vLLM's own work), and INT8 does not speed it up. Split of the measured prefill time, µs per token ("everything else" = measured time − the layer times above):
+
+| Model | BF16: linear layers | BF16: everything else | W8A8: INT8 matmuls | W8A8: quantization | W8A8: everything else | Measured speedup |
+|---|---|---|---|---|---|---|
+| 1B | 17.77 (77%) | 5.24 (23%) | 11.96 (69%) | 1.26 (7%) | 4.20 (24%) | 1.32× |
+| 3B | 49.76 (83%) | 10.11 (17%) | 32.18 (75%) | 2.62 (6%) | 7.89 (18%) | 1.40× |
+
+The two estimates of "everything else" differ by 1–2 µs per token, about 5% of the total. That is the uncertainty of this split: the layers probably run a little differently inside vLLM than alone.
+
+**From the ideal 2× to the measured speedup** (1B / 3B):
+
+| Assumption | Prefill speedup |
+|---|---|
+| Everything 2× faster | 2.00× / 2.00× |
+| Only the matmuls 2× faster, everything else unchanged | 1.63× / 1.71× |
+| Matmuls at their real INT8 speed on these shapes | 1.34× / 1.42× |
+| Plus the separate quantization kernel | 1.25× / 1.33× (predicted from the parts; measured 1.32× / 1.40×) |
+
+- **Three causes, all of similar size:**
+  - the parts that stay in BF16: −15 to −18%
+  - INT8 matmuls that are not 2× faster on short-K layers: −17 to −18%
+  - the separate quantization kernel: −6 to −7%
+- **Why the 3B gains more (1.40× vs 1.32×):** its K is larger (3072 vs 2048), so its INT8 matmuls are more efficient, and matmuls are a larger share of its time (83% vs 77%). Both effects grow with model size, so larger models should gain more from W8A8 (a prediction, not tested here).
+- **Generation steps under load (256 tokens per step):** all INT8 layers together run at 1.00× (1B) and 1.30× (3B) of BF16.
+  - Small matmuls run below peak in both formats.
+  - The quantization kernel takes a fixed ~16 µs per layer, which is 14–18% of the INT8 layer time.
+  - Some INT8 layers are slower than BF16 once quantization is included (1B: `o_proj` 0.69×, `down_proj` 0.88×).
+  - `lm_head` (BF16 in both formats) adds 18% (1B) and 10–13% (3B) of the matmul time per step.
+- **Static vs per-token scales:** at 8192 tokens, static scales save 0.9% of the layer time, matching the +1.0–1.2% measured in vLLM prefill. At 256 tokens they save 6% of the layer time, but this did not show in the end-to-end throughput (+0.1–0.2%).
+- **What could close the gap (not tested):**
+  - Merge activation quantization into the RMSNorm and SiLU kernels: up to +7%. vLLM has `fuse_norm_quant` / `fuse_act_quant` passes for this, off in our runs; INT8 support not checked.
+  - INT8 kernels tuned for short K.
+  - Larger models.
 
 ### Which layers cause the activation loss (`W8A8`, per-token scales)
 
@@ -411,4 +465,5 @@ Activation measurements (`scripts/act_stats.py`, BF16 Llama-3.2-1B, WikiText-2 t
 - 2026-11-10: `run_groupB.sh` finished. 1B SQ α=0.5 seeds 1 and 2: PPL 9.899 / 9.905 (27.9 / 28.0 s); weights-only 9.780 / 9.780. 3B RTN W8A8: PPL 7.889 (2.4 s, 0.05 GiB GPU), weights-only 7.823. 3B SQ α=0.5 seeds 0 / 1 / 2: 7.891 / 7.889 / 7.891 (65 s, 2.46 GiB GPU), weights-only 7.825 / 7.824 / 7.822. 3B SQ α=0.8: 7.881, weights-only 7.825. All 3B W8A8 checkpoints 3.361 GiB.
 - 2026-11-10: 3B RTN W8A8_STATIC: PPL 60.612 (66.0 s, 2.46 GiB GPU). With BF16 down_proj inputs: 7.948. `act_stats.py` on BF16 3B: down_proj input max 732 in block 1 (position 0, ratio 1420) and 536 in block 27 (position 0, ratio 60); other blocks ratio 4–8.
 - 2026-11-10: zero-shot of all W8A8 models (batch 16). 1B: RTN 59.95, SQ α=0.5 60.52 / 60.41 / 60.50, α=0.8 60.24. 3B: RTN 68.38, SQ α=0.5 68.65 / 68.41 / 68.45, α=0.8 68.78.
-- 2026-11-10: vLLM speed for W8A8 (`run_speed_groupB.sh`; RTN, SQ α=0.5 seed 0, RTN static). 1B RTN: TPOT 3.449 ms (1.31×), prefill 57,386 tok/s (1.32×), throughput 10,242 out tok/s (1.17×), 1.41 GiB weights, 557k KV tokens. 3B RTN: 7.674 ms (1.46×), 23,428 (1.40×), 3,064 (1.21×), 3.45 GiB, 132k. SQ and static within 1% of RTN. GPU probe 103.9–108.0 TFLOPS.
+- 2026-11-10: vLLM speed for W8A8 (`run_speed_groupB.sh`; RTN, SQ α=0.5 seed 0, RTN static). 1B RTN: TPOT 3.449 ms (1.31×), prefill 57,386 tok/s (1.32×), throughput 10,242 out tok/s (1.17×), 1.41 GiB weights, 557k KV tokens. 3B RTN: 7.674 ms (1.46×), 23,428 (1.40×), 3,064 (1.21×), 3.45 GiB, 132k. SQ and static within 1% of RTN. GPU probe 103.9–108.0 TFLOPS. vLLM kernel: `CutlassInt8ScaledMMLinearKernel`; `max_num_batched_tokens=8192`.
+- 2026-11-10: `int8_matmul_test.py` (vllm venv). Square 8192 matmul: BF16 108.6 TFLOPS, INT8 CUTLASS 199.3 TOPS, INT8 raw cuBLAS 222.0 TOPS (105.5 / 197.3 at the end). At 8192 tokens per step, INT8 matmul speedups over BF16 are 1.36–1.76× per layer; all layers with quantization 1.34× (1B) and 1.43× (3B). Prefill split, W8A8: INT8 matmuls 69% / 75%, quantization 7% / 6%, everything else 24% / 18%. At 256 tokens: all layers 1.00× (1B), 1.30× (3B).

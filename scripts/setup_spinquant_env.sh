@@ -26,7 +26,8 @@ pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 
 [ -d third_party/SpinQuant ] || git clone https://github.com/facebookresearch/SpinQuant.git third_party/SpinQuant
 git -C third_party/SpinQuant checkout "$SPINQUANT_COMMIT"
-pip install -r third_party/SpinQuant/requirement.txt "numpy<2"
+# numpy < 2 to match the 2024 versions SpinQuant was written for; pyarrow 26 (pulled in by datasets) refuses numpy 1.x.
+pip install -r third_party/SpinQuant/requirement.txt "numpy<2" "pyarrow<26"
 
 # Pick the wheel that matches this PyTorch (version, CUDA major version, C++ ABI), as the package's own setup.py does.
 WHEEL=$(python -c '
