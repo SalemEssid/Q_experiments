@@ -205,6 +205,11 @@ Y = (X · diag(s)⁻¹) · (diag(s) · W), with s_j = max|X_j|^α / max|W_j|^(1�
 - **Hidden size 3072 (3B) is not a power of two.** SpinQuant's Hadamard code handles it as a 12 × 256 Kronecker product (`get_had12`). Hidden size 2048, head sizes 64/128 and `down_proj`'s 8192 are powers of two.
 - **KV-cache groups:** the keys accept only one scale per token (`k_groupsize` −1) or per token and head (`k_groupsize` = head_dim). Values always use head_dim.
 
+**Observations (QuaRot-RTN via SpinQuant code, W4A4KV4):**
+- **The rotation alone rescues 4-bit activations:** RTN without rotation PPL 325 (1B) and 265 (3B). With QuaRot's random Hadamard rotations and the same RTN: 21.5 ± 0.5 and 13.4 ± 0.3 (3 rotation seeds). No calibration data is needed for this.
+- **Still 1.7–2.2× the BF16 perplexity,** much worse than 4-bit weights alone (RTN W4A16: 11.7 / 8.5). The 4-bit activations and KV cache are the hard part, even after rotation.
+- **The random rotation changes the result by up to 1 PPL** (1B: 21.0–22.1). This is the variance that SpinQuant sets out to remove by learning the rotation.
+
 ---
 
 ## 8. SpinQuant (planned)

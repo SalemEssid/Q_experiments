@@ -453,6 +453,25 @@ Research codebases with simulated (fake) quantization: accuracy and quantization
 - **Reproduced.** Both use the same text (289,076 tokens = 141 windows of 2048, no BOS token). The small 1B difference probably comes from BF16 rounding: SpinQuant runs its own copy of the transformers 4.44 Llama model, with batch size 4 and PyTorch 2.7, while we use transformers 5.21, batch size 1 and PyTorch 2.14. 0.05% is far below the differences group C is about.
 - **To remove even this offset,** group C differences are measured against the BF16 result of the same codebase.
 
+### RTN weights: what the rotation alone does (`run_groupC_rtn.sh`, SpinQuant code)
+
+W4A4KV4: weights 4-bit symmetric per channel (RTN with clipping search), activations 4-bit asymmetric per token, KV cache 4-bit asymmetric per token and head. No calibration data. QuaRot-RTN = QuaRot's random Hadamard rotations, then the same RTN; the seed chooses the random rotation.
+
+| Model | Method | Seed 0 | Seed 1 | Seed 2 | Mean ± std | Δ vs BF16 (same code) | Run time (load + quantize + evaluate) |
+|---|---|---|---|---|---|---|---|
+| Llama-3.2-1B | BF16 | | | | 9.761 | – | 34 s |
+| Llama-3.2-1B | RTN, no rotation | 325.5 | | | **325.5** | broken (33×) | 59 s |
+| Llama-3.2-1B | QuaRot-RTN | 22.07 | 21.29 | 21.04 | **21.47 ± 0.54** | +11.71 (2.2×) | 82 s |
+| Llama-3.2-3B | BF16 | | | | 7.817 | – | 55 s |
+| Llama-3.2-3B | RTN, no rotation | 264.8 | | | **264.8** | broken (34×) | 115 s |
+| Llama-3.2-3B | QuaRot-RTN | 13.61 | 13.07 | 13.59 | **13.42 ± 0.31** | +5.61 (1.7×) | 186 s |
+
+- **Without rotation, 4-bit activations break the model:** PPL 325 (1B) and 265 (3B). This matches what the papers report for RTN at W4A4KV4 (SpinQuant's README: about 1000 on Llama-3 8B).
+- **The rotation alone brings it back to a working model:** 325 → 21.5 (1B) and 265 → 13.4 (3B), with the same rounding and no calibration data. This is QuaRot's main claim: rotating spreads the outliers over all channels, so 4 bits per activation become usable.
+- **But W4A4KV4 is still far from BF16** with plain rounding: 2.2× (1B) and 1.7× (3B) the BF16 perplexity. For comparison, RTN at W4A16 gave 11.71 and 8.49. Quantizing activations and KV cache to 4 bits costs much more than the 4-bit weights. GPTQ (task 1) and learned rotations (SpinQuant, task 2) are meant to close this gap.
+- **The random rotation matters:** the three seeds span 1.04 PPL on the 1B (21.04–22.07) and 0.54 on the 3B. That is 100× more than the calibration-seed spread of AWQ in group A (0.010), and confirms SpinQuant's motivation that some random rotations are clearly better than others. Reporting a single rotation seed would be misleading.
+- **The larger model is more robust again:** 1.7× vs 2.2× of BF16.
+
 ## Log
 
 - 2026-11-09: Llama-3.2-1B BF16, PPL 9.7564 (141 windows, torch 2.14.1+cu126, transformers 5.22.2). Matches the published value of about 9.76.
@@ -482,3 +501,4 @@ Research codebases with simulated (fake) quantization: accuracy and quantization
 - 2026-11-10: vLLM speed for W8A8 (`run_speed_groupB.sh`; RTN, SQ α=0.5 seed 0, RTN static). 1B RTN: TPOT 3.449 ms (1.31×), prefill 57,386 tok/s (1.32×), throughput 10,242 out tok/s (1.17×), 1.41 GiB weights, 557k KV tokens. 3B RTN: 7.674 ms (1.46×), 23,428 (1.40×), 3,064 (1.21×), 3.45 GiB, 132k. SQ and static within 1% of RTN. GPU probe 103.9–108.0 TFLOPS. vLLM kernel: `CutlassInt8ScaledMMLinearKernel`; `max_num_batched_tokens=8192`.
 - 2026-11-10: `int8_matmul_test.py` (vllm venv). Square 8192 matmul: BF16 108.6 TFLOPS, INT8 CUTLASS 199.3 TOPS, INT8 raw cuBLAS 222.0 TOPS (105.5 / 197.3 at the end). At 8192 tokens per step, INT8 matmul speedups over BF16 are 1.36–1.76× per layer; all layers with quantization 1.34× (1B) and 1.43× (3B). Prefill split, W8A8: INT8 matmuls 69% / 75%, quantization 7% / 6%, everything else 24% / 18%. At 256 tokens: all layers 1.00× (1B), 1.30× (3B).
 - 2026-11-10: group C started. `spinquant` venv (PyTorch 2.7.1+cu126, transformers 4.44.2, fast-hadamard-transform 1.1.0 wheel; Hadamard check error 2.1e-4). NCCL fails on the vGPU (`cudaMemPoolCreate`: operation not supported), so SpinQuant was patched to gloo. SpinQuant BF16 (`run_spinquant_bf16.sh`): 1B PPL 9.7610, 3B 7.8173.
+- 2026-11-10: `run_groupC_rtn.sh` (SpinQuant code, W4A4KV4, RTN). 1B: RTN 325.474; QuaRot-RTN seeds 0/1/2 22.074 / 21.292 / 21.037. 3B: RTN 264.784; QuaRot-RTN 13.607 / 13.070 / 13.589. BF16 in the same runs: 9.761 / 7.817.

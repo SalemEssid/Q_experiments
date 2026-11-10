@@ -30,8 +30,10 @@ for size in ${SIZES:-1B 3B}; do
       nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 1000 > "logs/gpumem_train_${m}_seed$seed.txt" &
       smi=$!
       start=$(date +%s)
+      # PYTHONUNBUFFERED=1: without it Python keeps printed lines in a buffer when its output goes into a pipe,
+      # so the loss lines only reach the screen at the end of training.
       (cd third_party/SpinQuant && Q_CALIB_FILE=$ROOT/data/calib/c4_${m}_800x2048_seed0.pt Q_ROTATION_SEED=$seed \
-        python optimize_rotation.py \
+        PYTHONUNBUFFERED=1 python optimize_rotation.py \
           --input_model $model --output_rotation_path "$rot" \
           --output_dir "$ROOT/outputs/spinquant/train_${m}_seed$seed" --logging_dir "$ROOT/logs/tb_${m}_seed$seed" \
           --model_max_length 2048 --fp16 False --bf16 True --log_on_each_node False \
