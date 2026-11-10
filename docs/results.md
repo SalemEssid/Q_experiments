@@ -192,8 +192,11 @@ When one request generates tokens, every token requires reading all the weights 
 | Llama-3.2-1B | RTN | W8A8 | 9.888 | +0.132 (+1.4%) | 1.40 GiB | 1.6 s, 0.03 GiB GPU |
 | Llama-3.2-1B | SmoothQuant α=0.5 | W8A8 | 9.904 | +0.148 (+1.5%) | 1.40 GiB | 28.1 s, 2.12 GiB GPU |
 | Llama-3.2-1B | SmoothQuant α=0.8 | W8A8 | 9.890 | +0.134 (+1.4%) | 1.40 GiB | 28.0 s, 2.12 GiB GPU |
+| Llama-3.2-1B | RTN | W8A8_STATIC | **1301.9** | broken | 1.40 GiB | 28.6 s, 2.12 GiB GPU |
+| Llama-3.2-1B | SmoothQuant α=0.5 | W8A8_STATIC | **1341.8** | broken | 1.40 GiB | 53.2 s, 2.12 GiB GPU |
+| Llama-3.2-1B | SmoothQuant α=0.8 | W8A8_STATIC | **1322.2** | broken | 1.40 GiB | 52.8 s, 2.12 GiB GPU |
 
-Seed 0 only so far. Peak CPU RAM: 3.5 GiB (RTN), 8.4–8.5 GiB (SmoothQuant, which holds the calibration activations).
+Seed 0 only so far. `W8A8_STATIC` = the same INT8 weights, but one fixed activation scale per layer measured on the calibration data (llm-compressor's `minmax` observer). Static RTN needs a calibration pass too, hence 28.6 s. Peak CPU RAM: 3.5 GiB (RTN), 8.4–8.5 GiB (SmoothQuant, which holds the calibration activations).
 
 **Activation quantization is really applied in evaluation:** `ppl_eval.py` found 112 layers with INT8 input activations (16 blocks × 7 Linear layers; `lm_head` excluded). The first-window loss is 1.99390 with activation quantization and 1.98569 without it.
 
@@ -211,7 +214,31 @@ Seed 0 only so far. Peak CPU RAM: 3.5 GiB (RTN), 8.4–8.5 GiB (SmoothQuant, whi
 - **8-bit RTN is already close to BF16 on the 1B:** +0.13 PPL, 15× less than RTN at W4A16 (+1.95) and less than the best W4A16 method (GPTQ, +0.94 on average).
 - **83% of the W8A8 loss comes from the activations** (+0.109 of +0.132). 8-bit weights alone cost only +0.023.
 - **SmoothQuant does not help with per-token activation scales:** α=0.5 is slightly worse than RTN (+0.148 vs +0.132), α=0.8 equal (+0.134). With α=0.8 the weight loss grows a little (+0.026 vs +0.023), so difficulty did move to the weights, as intended, but the activation loss did not shrink (+0.108 vs +0.109). Differences of 0.01–0.02 PPL may be within calibration-seed noise (not measured yet). Either way, there is no gain.
-- **Likely reason (being tested):** on Llama, SmoothQuant smooths only the inputs of q/k/v and gate/up. If most of the activation loss comes from the inputs of `o_proj` or `down_proj`, which it cannot smooth, smoothing the others cannot help. Test: `scripts/run_act_diag.sh` leaves one group of layers in BF16 at a time.
+- **Likely reason:** on Llama, SmoothQuant smooths only the inputs of q/k/v and gate/up. If most of the activation loss comes from the inputs of `o_proj` or `down_proj`, which it cannot smooth, smoothing the others cannot help. The layer test below confirms this.
+
+### Which layers cause the activation loss (`W8A8`, per-token scales)
+
+`scripts/run_act_diag.sh`: one group of layers gets BF16 inputs, all others stay W8A8. "Share" = part of the activation loss (W8A8 PPL − weights-only PPL) that disappears.
+
+| Model | Method | BF16 inputs in | PPL | PPL drop | Share of activation loss |
+|---|---|---|---|---|---|
+| Llama-3.2-1B | RTN (9.888, activation loss +0.109) | q/k/v (smoothed by SQ) | 9.875 | 0.013 | 12% |
+| | | o_proj | 9.884 | 0.004 | 4% |
+| | | gate/up (smoothed by SQ) | 9.879 | 0.009 | 9% |
+| | | **down_proj** | **9.812** | **0.076** | **70%** |
+| Llama-3.2-1B | SmoothQuant α=0.5 (9.904, activation loss +0.126) | q/k/v (smoothed) | 9.882 | 0.022 | 18% |
+| | | o_proj | 9.898 | 0.006 | 5% |
+| | | gate/up (smoothed) | 9.882 | 0.022 | 18% |
+| | | **down_proj** | **9.827** | **0.077** | **62%** |
+
+- **`down_proj`'s input causes 70% of the activation loss**, and SmoothQuant does not touch it: its cost is the same with and without smoothing (0.076 vs 0.077). The four shares add up to about 100% (95% and 103%), so the groups contribute roughly independently.
+- **In the layers SmoothQuant does smooth, it made the activation loss larger:** q/k/v 0.013 → 0.022, gate/up 0.009 → 0.022. With one scale per token, what matters is how uneven the channels are *within each token*. SmoothQuant's scales are chosen from each channel's extreme over all calibration tokens, which apparently does not make an ordinary token more even (hypothesis; `scripts/act_stats.py` measures the activations).
+
+### Static activation scales break the model
+
+- **All three static models are broken:** PPL 1302 (RTN), 1342 (SQ α=0.5), 1322 (SQ α=0.8), against 9.89 with per-token scales. Same weights, so this is entirely the activation scale. The sample generations are degraded too: wrong facts ("located in the north-east corner of the country") and repetition ("a a a a" for SQ α=0.5).
+- **SmoothQuant does not rescue it,** although this is the setting it was designed for.
+- **Hypothesis (being tested):** a few huge values (outliers far beyond an ordinary token's range) in the input of `down_proj`, which SmoothQuant does not smooth on Llama. One fixed scale must cover them, so the scale becomes so coarse that ordinary tokens round to zero. Tests: the layer test on the static models, and `scripts/act_stats.py` on the BF16 model.
 - **Size:** 1.40 GiB (1.65× smaller than BF16): INT8 weights plus the 0.49 GiB BF16 embedding. W4A16 is 0.96 GiB.
 - Hugging Face evaluation takes 18 s instead of 11 s, because the activation rounding is simulated in software. This says nothing about real speed (measured later in vLLM).
 
@@ -234,3 +261,5 @@ Seed 0 only so far. Peak CPU RAM: 3.5 GiB (RTN), 8.4–8.5 GiB (SmoothQuant, whi
 - 2026-11-10: batch 32 vs 16 for all eight 1B models: differences −0.26 to +0.16 points, mean −0.06, no systematic direction.
 - 2026-11-10: group B started. Llama-3.2-1B RTN W8A8: PPL 9.8883 (+0.132). Quantization 1.6 s, peak GPU 0.03 GiB, peak RAM 3.48 GiB, 1.396 GiB on disk. Sample generation coherent. Activation check: 112 layers; first-window loss 1.99390 (activations quantized) vs 1.98569 (not quantized).
 - 2026-11-10: Llama-3.2-1B SmoothQuant W8A8 (seed 0): α=0.5 PPL 9.9044 (28.1 s, 2.12 GiB GPU, 8.43 GiB RAM); α=0.8 PPL 9.8903 (28.0 s, 2.12 GiB GPU, 8.53 GiB RAM). Samples coherent. Weights-only PPL: RTN 9.7793, SQ α=0.5 9.7784, SQ α=0.8 9.7822.
+- 2026-11-10: layer test (`run_act_diag.sh`) on RTN and SQ α=0.5 W8A8: BF16 inputs in down_proj remove 70% / 62% of the activation loss; q/k/v 12% / 18%, gate/up 9% / 18%, o_proj 4% / 5%.
+- 2026-11-10: Llama-3.2-1B W8A8_STATIC (seed 0): RTN PPL 1301.9 (28.6 s), SQ α=0.5 1341.8 (53.2 s), SQ α=0.8 1322.2 (52.8 s); 2.12 GiB GPU each. All broken; samples degraded.

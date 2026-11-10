@@ -153,8 +153,9 @@ Y = (X · diag(s)⁻¹) · (diag(s) · W), with s_j = max|X_j|^α / max|W_j|^(1�
 
 **How we run it:** llm-compressor 0.15.0 `SmoothQuantModifier(smoothing_strength=α)` followed by `QuantizationModifier` (RTN, as in the paper). Details from the 0.15.0 source code:
 - **Two smoothing points per layer on Llama:** `input_layernorm` → q/k/v_proj and `post_attention_layernorm` → gate/up_proj. The scale is folded into the RMSNorm weight. The inputs of `o_proj` and `down_proj` are **not** smoothed, because no norm sits directly before them. On Llama, `down_proj`'s input is known to have the largest outliers, so this is a limitation to keep in mind when reading the results.
-- **Activation statistic:** the largest absolute value of each channel over all calibration tokens (a running min/max hook on the norm output).
-- **Scale formula:** s_j = max|X_j|^α / (2 · max|W_j|)^(1−α), with the weight maximum taken over all layers that share the input (q, k and v together). The factor 2 multiplies every channel's scale by the same constant, which changes neither per-token nor per-channel INT8 rounding.
+- **Activation statistic:** each channel's **range** over all calibration tokens, max − min (a running min/max hook on the output of the norm). The paper uses max|X_j|. For a channel symmetric around zero the range is 2 · max|X_j|.
+- **Scale formula:** s_j = (max_j − min_j)^α / (2 · max|W_j|)^(1−α), with the weight maximum taken over all layers that share the input (q, k and v together). For symmetric channels at α = 0.5, the two factors of 2 cancel and this equals the paper's formula. Otherwise it differs by a per-channel factor between 1 and 2.
+- **The smoothing layer can also be a Linear layer** (its output rows are divided by s), so an `up_proj → down_proj` mapping is possible: `down_proj`'s input is silu(gate) × up, so dividing up's output channel j by s_j divides down's input channel j by s_j. But the statistics hook sits on the *smoothing* layer's output, so the scales would come from up_proj's output, not from down_proj's actual input. That is an approximation (AWQ hooks the right tensor).
 - **α = 0.5** (paper and llm-compressor default) as the main setting, decided in advance. **α = 0.8** (llm-compressor's Llama W8A8 example) as a sensitivity check.
 - **Formats:**
   - `W8A8` preset: INT8 symmetric weights with one scale per output channel, INT8 symmetric activations with one scale per token computed at run time. This is finer than any of the paper's levels.
@@ -166,7 +167,9 @@ Y = (X · diag(s)⁻¹) · (diag(s) · W), with s_j = max|X_j|^α / max|W_j|^(1�
 **Observations:**
 - Llama-3.2-1B, `W8A8` (per-token activation scales), seed 0: α=0.5 PPL 9.904, α=0.8 9.890, vs RTN 9.888 and BF16 9.756. **No gain over plain rounding.** Quantization takes 28 s and 2.1 GiB of GPU (one calibration pass to collect the activation maxima).
 - The error split shows why it cannot gain much: RTN's loss is mostly activations (+0.109 of +0.132), but smoothing leaves that part unchanged (+0.108 at α=0.8) while adding a little weight loss (+0.026 vs +0.023).
-- Hypothesis: the activation loss sits in the inputs SmoothQuant does not smooth (`o_proj`, `down_proj`). A per-token scale already handles a token whose values are all large; what remains are outliers that the standard Llama mappings do not reach.
+- **Confirmed by the layer test:** `down_proj`'s input causes 70% of RTN's activation loss, and SmoothQuant cannot smooth it on Llama (its cost stays 0.076–0.077). In the layers it does smooth, it made the activation loss *larger* (q/k/v 0.013 → 0.022, gate/up 0.009 → 0.022).
+- **Static per-layer activation scales (`W8A8_STATIC`) break the model:** PPL about 1300 for RTN and for both α. SmoothQuant does not rescue the setting it was designed for, on this model. Suspected cause: a few huge values in `down_proj`'s input, which it cannot smooth. Being checked with `run_act_diag.sh` and `act_stats.py`.
+- **For the report:** SmoothQuant's published results are on OPT, BLOOM and earlier Llama models. Its standard Llama mappings leave out the input that matters most on Llama-3.2. This is a limitation of the method's design (it smooths only inputs that follow a norm), not only of llm-compressor.
 
 ---
 
