@@ -210,9 +210,17 @@ Y = (X · diag(s)⁻¹) · (diag(s) · W), with s_j = max|X_j|^α / max|W_j|^(1�
 - **Still 1.7–2.2× the BF16 perplexity,** much worse than 4-bit weights alone (RTN W4A16: 11.7 / 8.5). The 4-bit activations and KV cache are the hard part, even after rotation.
 - **The random rotation changes the result by up to 1 PPL** (1B: 21.0–22.1). This is the variance that SpinQuant sets out to remove by learning the rotation.
 
+**Observations (QuaRot-GPTQ via SpinQuant code, W4A4KV4, our C4 windows):**
+- **14.90 ± 0.17 (1B) and 10.248 ± 0.008 (3B)**, over 3 rotation seeds. GPTQ wins back 56% / 57% of QuaRot-RTN's loss against BF16.
+- **GPTQ without rotation stays broken:** 221 (1B) and 526 (3B, worse than RTN's 265).
+  - In SpinQuant's `ptq_model`, the weights are rounded (`gptq_fwrd`) *before* the activation quantizers are configured.
+  - GPTQ therefore optimizes for unquantized inputs, and cannot repair the error of the 4-bit activations. The rotation has to remove that error first.
+- **GPTQ makes the result almost independent of the random rotation:** the seed std falls from 0.54 to 0.17 (1B) and from 0.31 to 0.008 (3B). With GPTQ weights, the rotation-seed variance that motivates SpinQuant mostly disappears on the 3B.
+- **Cost:** about 231 s (1B) and 558 s (3B) for the rotation, GPTQ and the clipping search. Peak GPU memory is 9.15 / 16.26 GiB, including the BF16 model. That is about 26 / 74 s and 3.8 / 6.1 GiB more than GPTQ without rotation.
+
 ---
 
-## 8. SpinQuant (planned)
+## 8. SpinQuant (perplexity done, seed 0; zero-shot to do)
 
 **Paper:** Liu, Zhao, et al. (Meta). *SpinQuant: LLM Quantization with Learned Rotations*, ICLR 2025.
 
@@ -234,6 +242,27 @@ Y = (X · diag(s)⁻¹) · (diag(s) · W), with s_j = max|X_j|^α / max|W_j|^(1�
 - **The authors' scripts use asymmetric activations and KV cache** (`--a_asym --k_asym --v_asym`, KV groups of 128) and weight clipping (`--w_clip`, a search for the best clip ratio).
 - **Without `--rotate`** the same code gives the RTN / GPTQ W4A4 reference with no rotation.
 - **Evaluation:** WikiText-2 test joined with "\n\n", no BOS token, non-overlapping 2048-token windows. That is the same protocol as ours, so the BF16 perplexity should match 9.756 / 7.817.
+
+**How we ran it** (`run_spinquant_train.sh`):
+- `optimize_rotation.py` in one process with gloo.
+- 100 steps, lr 1.5 with cosine decay, batch 1 × 8 gradient-accumulation steps (the authors use 8 GPUs × batch 1).
+- Our 800 C4 windows; activations and KV cache 4-bit, weights 16-bit during training.
+- Initial rotation seeded with `Q_ROTATION_SEED=0`.
+- Then `spinquant_eval.py` with `--optimized_rotation_path`, followed by the same GPTQ as QuaRot-GPTQ.
+
+**Observations (seed 0):**
+- **The best W4A4KV4 result so far:** 14.02 (1B) and 9.60 (3B), vs QuaRot-GPTQ 14.90 ± 0.17 and 10.248 ± 0.008.
+  - The gain is −0.87 / −0.65 PPL (−6%), below all three random rotations on both models, and 86× the seed std on the 3B.
+  - The learned rotation is genuinely better than random ones, not a lucky draw.
+  - It closes 17% (1B) and 27% (3B) of QuaRot-GPTQ's remaining gap to BF16.
+- **Still +44% / +23% perplexity vs BF16,** against +10% / +6% for GPTQ W4A16 (different format and codebase).
+- **Training dominates the cost:**
+  - 5.6 h (1B) and 23.8 h (3B), i.e. 202 s and 858 s per step, with a peak of 7.3 / 11.7 GiB (`nvidia-smi`). The GPTQ step adds 229 / 559 s.
+  - That is about 90× / 150× the cost of QuaRot-GPTQ, for a 6% perplexity gain.
+  - The 3B takes 4.25× as long as the 1B for 2.6× the parameters.
+- **Training was much slower than expected,** and the cause was not investigated. Candidates: eager fake quantization of all activations and the KV cache, gradient checkpointing (two forward passes), re-rotating all weights every step, a shared GPU.
+- **The per-step loss is noisy** (first / last step 2.796 / 2.849 on the 1B), because each step sees different windows. The full curve is still to be extracted from the logs.
+- **One seed only,** because the 3B training alone takes a day.
 
 ---
 
@@ -312,3 +341,5 @@ Measured on Llama-3.2-1B and 3B (results.md, group B). Both kinds are "outliers"
 - W8A8 prefill is 1.32–1.40× faster than BF16, not 2×. We measured why: three causes of similar size (non-matmul time, INT8 matmuls only 1.4–1.8× faster on these layer shapes, a separate quantization kernel). Is this deep enough for the report, or should we also try vLLM's quantization-fusion passes (`fuse_norm_quant`, `fuse_act_quant`) to see how much merging the quantization would recover?
 - The zero-shot average varies by 0.3–0.5 points between calibration seeds. Are 3 seeds enough, and should groups B and C also use 3 seeds?
 - Group C will have no end-to-end speed numbers (no W4A4 kernels in vLLM for the A40). Is accuracy plus kernel-level speed (QuaRot's CUTLASS kernels) enough?
+- SpinQuant beats QuaRot-GPTQ by 0.65–0.87 PPL (6%), but its rotation training took 5.6 h (1B) and 23.8 h (3B) on our GPU, about 90–150× the cost of QuaRot-GPTQ. Should we run more SpinQuant seeds (one day each on the 3B), or first profile why the training is this slow?
+- With GPTQ weights, the random-rotation spread almost disappears (3B std 0.008). Is it still fair to motivate SpinQuant by the seed variance, or should the report frame its gain as a systematic improvement over every random rotation?

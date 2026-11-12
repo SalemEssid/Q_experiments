@@ -33,6 +33,10 @@ ours.add_argument("--out-dir", default=str(ROOT / "results" / "groupC"))
 ours.add_argument("--extra", default=None, help="JSON file merged into the result (e.g. SpinQuant's rotation-training cost)")
 args, rest = ours.parse_known_args()
 spin_args = rest[1:] if rest and rest[0] == "--" else rest
+# Resolve our paths now: the script changes into SpinQuant's folder below.
+args.out_dir = str(Path(args.out_dir).resolve())
+if args.extra:
+    args.extra = str(Path(args.extra).resolve())
 if args.calib:
     os.environ["Q_CALIB_FILE"] = str(Path(args.calib).resolve())
 # One process, no torchrun: SpinQuant still calls torch.distributed, so give it a one-process group.

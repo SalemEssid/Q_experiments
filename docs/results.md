@@ -472,6 +472,68 @@ W4A4KV4: weights 4-bit symmetric per channel (RTN with clipping search), activat
 - **The random rotation matters:** the three seeds span 1.04 PPL on the 1B (21.04–22.07) and 0.54 on the 3B. That is 100× more than the calibration-seed spread of AWQ in group A (0.010), and confirms SpinQuant's motivation that some random rotations are clearly better than others. Reporting a single rotation seed would be misleading.
 - **The larger model is more robust again:** 1.7× vs 2.2× of BF16.
 
+### GPTQ weights and learned rotations (`run_groupC_gptq.sh`, `run_spinquant_train.sh`, SpinQuant code)
+
+Same W4A4KV4 settings as above. The weights are now rounded with GPTQ on our 128 C4 windows (seed 0, the windows of groups A and B).
+- **QuaRot-GPTQ:** random Hadamard rotations, 3 rotation seeds.
+- **SpinQuant-GPTQ:** the rotations R1 and R2 are learned first, then the same GPTQ is applied. Training settings: 100 steps on our 800 C4 windows, activations and KV cache 4-bit and weights 16-bit during training, 8 windows per step. Only rotation seed 0 was run, because training is slow (see below).
+
+| Model | Method | Seed 0 | Seed 1 | Seed 2 | Mean ± std | Δ vs BF16 (same code) | Quantization time | Peak GPU (quantization) |
+|---|---|---|---|---|---|---|---|---|
+| Llama-3.2-1B | BF16 | | | | 9.761 | – | – | – |
+| Llama-3.2-1B | RTN, no rotation | 325.5 | | | 325.5 | broken | – | – |
+| Llama-3.2-1B | GPTQ, no rotation | 221.5 | | | 221.5 | broken | 205 s | 5.37 GiB |
+| Llama-3.2-1B | QuaRot-RTN | 22.07 | 21.29 | 21.04 | 21.47 ± 0.54 | +11.71 (2.20×) | – | – |
+| Llama-3.2-1B | QuaRot-GPTQ | 14.70 | 15.02 | 14.96 | 14.90 ± 0.17 | +5.13 (1.53×) | 231 s | 9.15 GiB |
+| Llama-3.2-1B | SpinQuant-GPTQ | 14.02 | | | **14.02** | +4.26 (1.44×) | 229 s, plus 5.6 h rotation training | 9.15 GiB (training: 7.3 GiB) |
+| Llama-3.2-3B | BF16 | | | | 7.817 | – | – | – |
+| Llama-3.2-3B | RTN, no rotation | 264.8 | | | 264.8 | broken | – | – |
+| Llama-3.2-3B | GPTQ, no rotation | 525.7 | | | 525.7 | broken | 484 s | 10.21 GiB |
+| Llama-3.2-3B | QuaRot-RTN | 13.61 | 13.07 | 13.59 | 13.42 ± 0.31 | +5.61 (1.72×) | – | – |
+| Llama-3.2-3B | QuaRot-GPTQ | 10.245 | 10.257 | 10.243 | 10.248 ± 0.008 | +2.43 (1.31×) | 558 s | 16.26 GiB |
+| Llama-3.2-3B | SpinQuant-GPTQ | 9.598 | | | **9.598** | +1.78 (1.23×) | 559 s, plus 23.8 h rotation training | 16.26 GiB (training: 11.7 GiB) |
+
+- **Quantization time:** rotation, GPTQ and the weight-clipping search, without loading and evaluation. The QuaRot-GPTQ values are the mean of the 3 seeds; they vary by less than 1%.
+- **Peak GPU memory of quantization** (`torch.cuda.max_memory_allocated`) includes the BF16 model, which SpinQuant's code moves to the GPU before quantizing.
+- **Training memory** is the peak of `nvidia-smi` for the whole process.
+- **Run time per run** (load, quantize, evaluate): 4.5 min (1B) and 10.7 min (3B).
+- **Runs:** all finished with no errors in the logs.
+
+**Findings:**
+- **GPTQ needs the rotation.** Without rotation, GPTQ leaves the model broken: 221 on the 1B, and 526 on the 3B, worse than RTN's 265.
+  - Cause, read in SpinQuant's `ptq_model`: GPTQ rounds the weights *before* the activation quantizers are switched on. It optimizes the weights for unquantized inputs, so it cannot fix an error that comes from the 4-bit activations.
+  - Every perplexity above about 100 means "broken"; differences between broken models carry no information.
+- **After rotation, GPTQ wins back more than half of the remaining loss:**
+  - QuaRot-RTN → QuaRot-GPTQ: 21.47 → 14.90 (1B) and 13.42 → 10.25 (3B).
+  - That is 56% (1B) and 57% (3B) of QuaRot-RTN's loss against BF16.
+- **GPTQ removes most of the rotation-seed variance:**
+  - The std falls from 0.54 to 0.17 on the 1B, and from 0.31 to 0.008 on the 3B (40× smaller; the three seeds span only 0.014).
+  - With GPTQ, it barely matters which random rotation is drawn, at least on the 3B. The large spread that motivates SpinQuant shows up mainly with RTN weights.
+- **SpinQuant's learned rotation is better than any of the random ones:**
+  - 14.02 vs 14.90 ± 0.17 on the 1B (−0.87, −5.9%), and 9.60 vs 10.25 ± 0.008 on the 3B (−0.65, −6.3%).
+  - It is below all three QuaRot-GPTQ seeds on both models. On the 3B the gain is 86× the seed std, so it is not a lucky starting rotation.
+  - It closes 17% (1B) and 27% (3B) of QuaRot-GPTQ's remaining gap to BF16.
+  - Only one SpinQuant seed was run.
+- **The best W4A4KV4 model is still far behind 4-bit weights alone:**
+  - SpinQuant is at +44% / +23% perplexity vs BF16.
+  - GPTQ W4A16 is at +10% / +6%, and RTN W8A8 at +1.4% / +0.9%.
+  - Quantizing the activations and the KV cache to 4 bits remains the hard part. These comparisons cross formats and codebases (llm-compressor vs SpinQuant), so they show the order of magnitude only.
+- **SpinQuant's cost is the rotation training:**
+  - 5.6 h (1B) and 23.8 h (3B) on our single A40-24Q, against 3.9 and 9.3 min for a full QuaRot-GPTQ run, so about 90× and 150× more.
+  - Training peak GPU memory: 7.3 / 11.7 GiB.
+  - Per training step (8 windows of 2048 tokens, forward and backward with gradient checkpointing): 202 s on the 1B and 858 s on the 3B, i.e. 25 s and 107 s per window. The 3B takes 4.25× as long for 2.6× the parameters.
+- **This training speed is much slower than expected, and the cause was not investigated.** Possible causes:
+  - eager-mode fake quantization of every activation and of the KV cache;
+  - gradient checkpointing, which runs every forward pass twice;
+  - re-rotating all weights at every step;
+  - a shared GPU.
+  - A profile of one step would tell.
+- **The rotation itself is cheap in time:** GPTQ with rotation takes 26 s (1B) and 74 s (3B) more than without. It raises peak GPU memory by 3.8 / 6.1 GiB (not investigated).
+- **The per-step training loss is too noisy to read from two points.**
+  - First and last step: 2.796 → 2.849 (1B) and 2.490 → 2.551 (3B).
+  - Mean over the 100 steps: 2.776 / 2.467.
+  - Each step sees 8 different windows, so a trend needs the whole curve, which is still to be extracted from `logs/train_*.log`. The perplexity gain shows that the learned rotation is better.
+
 ## Log
 
 - 2026-11-09: Llama-3.2-1B BF16, PPL 9.7564 (141 windows, torch 2.14.1+cu126, transformers 5.22.2). Matches the published value of about 9.76.
@@ -502,3 +564,13 @@ W4A4KV4: weights 4-bit symmetric per channel (RTN with clipping search), activat
 - 2026-11-10: `int8_matmul_test.py` (vllm venv). Square 8192 matmul: BF16 108.6 TFLOPS, INT8 CUTLASS 199.3 TOPS, INT8 raw cuBLAS 222.0 TOPS (105.5 / 197.3 at the end). At 8192 tokens per step, INT8 matmul speedups over BF16 are 1.36–1.76× per layer; all layers with quantization 1.34× (1B) and 1.43× (3B). Prefill split, W8A8: INT8 matmuls 69% / 75%, quantization 7% / 6%, everything else 24% / 18%. At 256 tokens: all layers 1.00× (1B), 1.30× (3B).
 - 2026-11-10: group C started. `spinquant` venv (PyTorch 2.7.1+cu126, transformers 4.44.2, fast-hadamard-transform 1.1.0 wheel; Hadamard check error 2.1e-4). NCCL fails on the vGPU (`cudaMemPoolCreate`: operation not supported), so SpinQuant was patched to gloo. SpinQuant BF16 (`run_spinquant_bf16.sh`): 1B PPL 9.7610, 3B 7.8173.
 - 2026-11-10: `run_groupC_rtn.sh` (SpinQuant code, W4A4KV4, RTN). 1B: RTN 325.474; QuaRot-RTN seeds 0/1/2 22.074 / 21.292 / 21.037. 3B: RTN 264.784; QuaRot-RTN 13.607 / 13.070 / 13.589. BF16 in the same runs: 9.761 / 7.817.
+- 2026-11-12: chain `run_spinquant_train.sh` (1B) → `run_groupC_gptq.sh` → `run_spinquant_train.sh` (3B) finished, no tracebacks in any log.
+  - **1B:**
+    - GPTQ, no rotation: 221.470 (204.9 s, 5.37 GiB).
+    - QuaRot-GPTQ, seeds 0 / 1 / 2: 14.701 / 15.024 / 14.959 (230.5–232.7 s, 9.15 GiB).
+    - SpinQuant-GPTQ, seed 0: 14.022 (GPTQ 229.2 s; rotation training 20,215 s, peak 7,434 MiB).
+  - **3B:**
+    - GPTQ, no rotation: 525.707 (484.1 s, 10.21 GiB).
+    - QuaRot-GPTQ: 10.245 / 10.257 / 10.243 (555.9–561.9 s, 16.26 GiB).
+    - SpinQuant-GPTQ: 9.598 (558.6 s; training 85,854 s, peak 11,962 MiB).
+  - **Training loss** (first step / last step / mean): 1B 2.796 / 2.849 / 2.776; 3B 2.490 / 2.551 / 2.467. `train_runtime` 20,191 s and 85,822 s.
